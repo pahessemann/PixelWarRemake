@@ -1,0 +1,13 @@
+{
+  "host": "0.0.0.0",
+  "port": 8080,
+  "map_width": 1000,
+  "map_height": 1000,
+  "palette_size": 16,
+  "cooldown_seconds": 600,
+  "pixel_quota_per_cooldown": 3,
+  "session_ttl_seconds": 86400,
+  "thread_pool_size": 8,
+  "max_body_bytes": 8192,
+  "data_dir": "data"
+}

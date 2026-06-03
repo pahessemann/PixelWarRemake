@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111827">
+  <title>PixelWarRemake</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/site.webmanifest">
+  <link rel="stylesheet" href="/styles.css?v=camera-v1">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <h1>PixelWarRemake</h1>
+          <p id="connectionLabel">Invite</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <span class="metric"><span id="mapSize">-</span></span>
+        <span class="metric">Seq <span id="sequenceValue">0</span></span>
+        <button id="refreshButton" class="icon-button" type="button" title="Rafraichir la carte" aria-label="Rafraichir la carte">R</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="panel side-panel">
+        <section class="auth-section">
+          <div class="section-head">
+            <h2>Compte</h2>
+            <button id="logoutButton" class="ghost-button hidden" type="button">Sortir</button>
+          </div>
+
+          <div id="authConnected" class="connected-card hidden">
+            <span>Vous êtes connecté en tant que</span>
+            <strong id="connectedUsername">-</strong>
+          </div>
+
+          <div id="authTabs" class="segmented" role="tablist" aria-label="Mode compte">
+            <button id="loginMode" class="segment active" type="button">Login</button>
+            <button id="registerMode" class="segment" type="button">Register</button>
+          </div>
+
+          <form id="authForm" class="form-grid" autocomplete="on">
+            <label>
+              <span>Username</span>
+              <input id="usernameInput" name="username" type="text" minlength="3" maxlength="32" autocomplete="username" required>
+            </label>
+            <label>
+              <span>Password</span>
+              <input id="passwordInput" name="password" type="password" minlength="8" maxlength="256" autocomplete="current-password" required>
+            </label>
+            <button id="authSubmit" class="primary-button" type="submit">Login</button>
+          </form>
+        </section>
+
+        <section class="palette-section">
+          <div class="section-head">
+            <h2>Palette</h2>
+            <span id="selectedColorLabel">0</span>
+          </div>
+          <div id="paletteGrid" class="palette-grid" aria-label="Palette de couleurs"></div>
+          <div class="placement-box">
+            <span>Case cible <strong id="targetCellLabel">-</strong></span>
+            <span>Placements <strong id="quotaLabel">0/3</strong></span>
+            <button id="placeButton" class="primary-button" type="button" disabled>Valider le pixel</button>
+          </div>
+        </section>
+
+        <section class="cooldown-section">
+          <div class="section-head">
+            <h2>Cooldown</h2>
+            <span id="readyLabel" class="ready-dot blocked">Wait</span>
+          </div>
+          <div class="cooldown-display">
+            <span id="cooldownTime">--:--</span>
+            <div class="cooldown-track">
+              <div id="cooldownBar"></div>
+            </div>
+          </div>
+        </section>
+      </aside>
+
+      <section class="map-zone">
+        <div class="map-toolbar">
+          <div class="cursor-readout">
+            <span>X <strong id="cursorX">-</strong></span>
+            <span>Y <strong id="cursorY">-</strong></span>
+            <span>Color <strong id="cursorColor">-</strong></span>
+          </div>
+          <div class="map-actions">
+            <button id="zoomOutButton" class="icon-button" type="button" title="Zoom arriere" aria-label="Zoom arriere">-</button>
+            <span id="zoomLabel">100%</span>
+            <button id="zoomInButton" class="icon-button" type="button" title="Zoom avant" aria-label="Zoom avant">+</button>
+          </div>
+        </div>
+
+        <div class="canvas-frame" id="canvasFrame">
+          <div id="canvasStage" class="canvas-stage">
+            <canvas id="pixelCanvas" width="1" height="1" data-testid="pixel-canvas"></canvas>
+            <canvas id="highlightCanvas" width="1" height="1" aria-hidden="true"></canvas>
+          </div>
+          <div id="loadingOverlay" class="loading-overlay">Chargement</div>
+        </div>
+
+        <footer class="status-line">
+          <span id="statusText">Initialisation</span>
+          <span id="lastRefresh">-</span>
+        </footer>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js?v=camera-v1" defer></script>
+</body>
+</html>
