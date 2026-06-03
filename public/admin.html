@@ -53,6 +53,44 @@
             <span>Cooldown</span>
             <strong id="rulesStats">-</strong>
           </div>
+          <div class="admin-stat">
+            <span>Backups</span>
+            <strong id="backupsCount">-</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="admin-band">
+        <div class="admin-head">
+          <div>
+            <h2>Carte</h2>
+            <p>Sauvegardes serveur, rollback et reset complet.</p>
+          </div>
+        </div>
+
+        <div class="admin-actions">
+          <button id="createBackupButton" class="ghost-button" type="button">Backup manuel</button>
+          <button id="resetMapButton" class="ghost-button danger-button" type="button">Reset carte</button>
+        </div>
+
+        <div class="admin-table-wrap">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Date</th>
+                <th>Type</th>
+                <th>Sequence</th>
+                <th>Taille</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="backupsTableBody">
+              <tr>
+                <td colspan="6">Chargement</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </section>
 

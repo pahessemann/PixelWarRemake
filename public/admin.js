@@ -13,6 +13,10 @@ const adminEls = {
   mapStats: document.getElementById("mapStats"),
   sequenceStats: document.getElementById("sequenceStats"),
   rulesStats: document.getElementById("rulesStats"),
+  backupsCount: document.getElementById("backupsCount"),
+  createBackupButton: document.getElementById("createBackupButton"),
+  resetMapButton: document.getElementById("resetMapButton"),
+  backupsTableBody: document.getElementById("backupsTableBody"),
   usersTableBody: document.getElementById("usersTableBody")
 };
 
@@ -68,12 +72,76 @@ function formatTimestamp(timestamp) {
   return new Date(timestamp * 1000).toLocaleString();
 }
 
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) {
+    return "-";
+  }
+  if (bytes < 1024) {
+    return `${bytes} o`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} Ko`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(2)} Mo`;
+}
+
 function renderSummary(summary) {
   adminEls.name.textContent = `Admin ${summary.admin_username}`;
   adminEls.usersCount.textContent = String(summary.users_count);
   adminEls.mapStats.textContent = `${summary.map.width} x ${summary.map.height}`;
   adminEls.sequenceStats.textContent = `Seq ${summary.map.sequence}`;
   adminEls.rulesStats.textContent = `${summary.rules.pixel_quota_per_cooldown} px / ${summary.rules.cooldown_seconds}s`;
+}
+
+function renderBackups(backups) {
+  adminEls.backupsCount.textContent = String(backups.length);
+  adminEls.backupsTableBody.innerHTML = "";
+  if (!backups.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 6;
+    cell.textContent = "Aucun backup";
+    row.appendChild(cell);
+    adminEls.backupsTableBody.appendChild(row);
+    return;
+  }
+
+  for (const backup of backups) {
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td></td>
+      <td>${formatTimestamp(backup.created_at)}</td>
+      <td></td>
+      <td>Seq ${backup.sequence}</td>
+      <td>${formatBytes(backup.bytes)}</td>
+      <td></td>
+    `;
+
+    row.children[0].textContent = backup.id;
+    row.children[2].textContent = backup.reason;
+
+    const actions = document.createElement("div");
+    actions.className = "admin-row-actions";
+
+    const rollbackButton = document.createElement("button");
+    rollbackButton.className = "ghost-button";
+    rollbackButton.type = "button";
+    rollbackButton.textContent = "Rollback";
+    rollbackButton.addEventListener("click", () => rollbackBackup(backup.id));
+    actions.appendChild(rollbackButton);
+
+    if (backup.screenshot) {
+      const screenshotButton = document.createElement("button");
+      screenshotButton.className = "ghost-button";
+      screenshotButton.type = "button";
+      screenshotButton.textContent = "Screen";
+      screenshotButton.addEventListener("click", () => openScreenshot(backup.id));
+      actions.appendChild(screenshotButton);
+    }
+
+    row.children[5].appendChild(actions);
+    adminEls.backupsTableBody.appendChild(row);
+  }
 }
 
 function renderUsers(users) {
@@ -112,6 +180,78 @@ function renderUsers(users) {
   }
 }
 
+async function createBackup() {
+  try {
+    setAdminStatus("Backup manuel");
+    const payload = await adminApi("/admin/backups/create", {
+      method: "POST",
+      body: JSON.stringify({ reason: "manual", screenshot: true })
+    });
+    showNotice(`Backup ${payload.backup.id} cree`, "ok");
+    await refreshAdmin();
+  } catch (error) {
+    showNotice(`Backup impossible: ${error.message}`, "error");
+    setAdminStatus("Erreur");
+  }
+}
+
+async function rollbackBackup(id) {
+  if (!window.confirm(`Restaurer le backup ${id} ? Un backup de securite sera cree avant le rollback.`)) {
+    return;
+  }
+
+  try {
+    setAdminStatus("Rollback");
+    await adminApi("/admin/backups/rollback", {
+      method: "POST",
+      body: JSON.stringify({ id })
+    });
+    showNotice(`Rollback ${id} applique`, "ok");
+    await refreshAdmin();
+  } catch (error) {
+    showNotice(`Rollback impossible: ${error.message}`, "error");
+    setAdminStatus("Erreur");
+  }
+}
+
+async function resetMap() {
+  if (!window.confirm("Reset complet de la carte ? Un backup et un screen final seront crees avant le reset.")) {
+    return;
+  }
+
+  try {
+    setAdminStatus("Reset carte");
+    const payload = await adminApi("/admin/map/reset", {
+      method: "POST",
+      body: JSON.stringify({ color: 0 })
+    });
+    showNotice(`Carte reset. Backup final: ${payload.final_backup.id}`, "ok");
+    await refreshAdmin();
+  } catch (error) {
+    showNotice(`Reset impossible: ${error.message}`, "error");
+    setAdminStatus("Erreur");
+  }
+}
+
+async function openScreenshot(id) {
+  try {
+    const response = await fetch(`/admin/backups/screenshot?id=${encodeURIComponent(id)}`, {
+      headers: {
+        Authorization: `Bearer ${adminState.token}`
+      }
+    });
+    if (!response.ok) {
+      throw new Error(`http_${response.status}`);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank", "noopener");
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (error) {
+    showNotice(`Screen inaccessible: ${error.message}`, "error");
+  }
+}
+
 async function resetCooldown(userId) {
   try {
     setAdminStatus("Reset cooldown");
@@ -145,19 +285,24 @@ async function refreshAdmin() {
 
     hideNotice();
     setAdminStatus("Chargement");
-    const [summary, usersPayload] = await Promise.all([
+    const [summary, usersPayload, backupsPayload] = await Promise.all([
       adminApi("/admin/summary"),
-      adminApi("/admin/users")
+      adminApi("/admin/users"),
+      adminApi("/admin/backups")
     ]);
     renderSummary(summary);
     renderUsers(usersPayload.users || []);
+    renderBackups(backupsPayload.backups || []);
     setAdminStatus("Admin actif");
   } catch (error) {
     showNotice(explainAccessError(error), "error");
     setAdminStatus("Acces refuse");
     adminEls.usersTableBody.innerHTML = `<tr><td colspan="6">-</td></tr>`;
+    adminEls.backupsTableBody.innerHTML = `<tr><td colspan="6">-</td></tr>`;
   }
 }
 
 adminEls.refreshButton.addEventListener("click", refreshAdmin);
+adminEls.createBackupButton.addEventListener("click", createBackup);
+adminEls.resetMapButton.addEventListener("click", resetMap);
 refreshAdmin();

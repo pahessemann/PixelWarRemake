@@ -5,6 +5,7 @@
 #include "pixelwar/http/Router.hpp"
 #include "pixelwar/security/RateLimiter.hpp"
 #include "pixelwar/security/SessionManager.hpp"
+#include "pixelwar/storage/MapBackup.hpp"
 #include "pixelwar/storage/PixelMap.hpp"
 #include "pixelwar/storage/UserStore.hpp"
 
@@ -34,6 +35,9 @@ int main(int argc, char** argv) {
 
         pixelwar::controllers::registerStaticRoutes(router, "public");
         pixelwar::controllers::registerApiRoutes(router, pixelMap, userStore, sessions, rateLimiter, cfg);
+
+        pixelwar::storage::MapBackupScheduler backupScheduler(pixelMap, cfg.dataDir, std::chrono::hours(1));
+        backupScheduler.start();
 
         pixelwar::http::HttpServer server(cfg.host, cfg.port, cfg.threadPoolSize, cfg.maxBodyBytes, router);
         server.run();

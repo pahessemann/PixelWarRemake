@@ -28,8 +28,10 @@ public:
 
     bool loadBinary(const std::filesystem::path& path);
     void saveBinary(const std::filesystem::path& path) const;
+    void saveBmp(const std::filesystem::path& path) const;
 
     bool setPixel(std::size_t x, std::size_t y, std::uint8_t color, PixelChange& change);
+    void reset(std::uint8_t color = 0);
     [[nodiscard]] std::string toJson(std::optional<std::uint64_t> since) const;
     [[nodiscard]] bool isInBounds(std::size_t x, std::size_t y) const;
 
@@ -53,4 +55,3 @@ private:
 };
 
 } // namespace pixelwar::storage
-

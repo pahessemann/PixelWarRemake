@@ -160,6 +160,108 @@ paths:
           description: Authenticated user is not the configured admin
         "404":
           description: User not found
+  /admin/backups:
+    get:
+      summary: List map backups
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Backup list
+        "401":
+          description: Missing or invalid token
+        "403":
+          description: Authenticated user is not the configured admin
+  /admin/backups/create:
+    post:
+      summary: Create a map backup
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                screenshot:
+                  type: boolean
+      responses:
+        "200":
+          description: Backup created
+        "401":
+          description: Missing or invalid token
+        "403":
+          description: Authenticated user is not the configured admin
+  /admin/backups/rollback:
+    post:
+      summary: Restore a map backup
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id:
+                  type: string
+      responses:
+        "200":
+          description: Backup restored after creating a safety backup
+        "401":
+          description: Missing or invalid token
+        "403":
+          description: Authenticated user is not the configured admin
+        "404":
+          description: Backup not found
+  /admin/map/reset:
+    post:
+      summary: Reset the map after creating a final backup and screenshot
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                color:
+                  type: integer
+                  minimum: 0
+                  maximum: 15
+      responses:
+        "200":
+          description: Map reset
+        "401":
+          description: Missing or invalid token
+        "403":
+          description: Authenticated user is not the configured admin
+  /admin/backups/screenshot:
+    get:
+      summary: Download a backup screenshot
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: BMP screenshot
+        "401":
+          description: Missing or invalid token
+        "403":
+          description: Authenticated user is not the configured admin
+        "404":
+          description: Screenshot not found
 components:
   securitySchemes:
     bearerAuth:

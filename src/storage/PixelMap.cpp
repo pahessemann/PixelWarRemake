@@ -32,6 +32,14 @@ void writeU32(std::ofstream& file, std::uint32_t value) {
     file.write(bytes, sizeof(bytes));
 }
 
+void writeU16(std::ofstream& file, std::uint16_t value) {
+    const char bytes[] = {
+        static_cast<char>(value & 0xFF),
+        static_cast<char>((value >> 8) & 0xFF)
+    };
+    file.write(bytes, sizeof(bytes));
+}
+
 void writeU64(std::ofstream& file, std::uint64_t value) {
     for (int shift = 0; shift < 64; shift += 8) {
         const char byte = static_cast<char>((value >> shift) & 0xFF);
@@ -61,6 +69,26 @@ bool readU64(std::ifstream& file, std::uint64_t& value) {
         value |= static_cast<std::uint64_t>(static_cast<unsigned char>(byte)) << shift;
     }
     return true;
+}
+
+struct RgbColor {
+    std::uint8_t r = 0;
+    std::uint8_t g = 0;
+    std::uint8_t b = 0;
+};
+
+RgbColor paletteColor(std::uint8_t color) {
+    static constexpr RgbColor kPalette[] = {
+        {0x00, 0x00, 0x00}, {0xff, 0xff, 0xff}, {0xff, 0x45, 0x00}, {0xff, 0xa8, 0x00},
+        {0xff, 0xd6, 0x35}, {0x00, 0xa3, 0x68}, {0x7e, 0xed, 0x56}, {0x24, 0x50, 0xa4},
+        {0x36, 0x90, 0xea}, {0x51, 0xe9, 0xf4}, {0x81, 0x1e, 0x9f}, {0xb4, 0x4a, 0xc0},
+        {0xff, 0x99, 0xaa}, {0x9c, 0x69, 0x26}, {0x89, 0x8d, 0x90}, {0xd4, 0xd7, 0xd9}
+    };
+
+    if (color < std::size(kPalette)) {
+        return kPalette[color];
+    }
+    return kPalette[0];
 }
 
 } // namespace
@@ -187,6 +215,59 @@ void PixelMap::saveBinary(const std::filesystem::path& path) const {
     }
 }
 
+void PixelMap::saveBmp(const std::filesystem::path& path) const {
+    if (!path.parent_path().empty()) {
+        std::filesystem::create_directories(path.parent_path());
+    }
+
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    const std::uint32_t width = static_cast<std::uint32_t>(width_);
+    const std::uint32_t height = static_cast<std::uint32_t>(height_);
+    const std::uint32_t rowStride = ((width * 3U + 3U) / 4U) * 4U;
+    const std::uint32_t imageSize = rowStride * height;
+    const std::uint32_t fileSize = 14U + 40U + imageSize;
+
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file) {
+        throw std::runtime_error("cannot open screenshot file for writing");
+    }
+
+    file.write("BM", 2);
+    writeU32(file, fileSize);
+    writeU16(file, 0);
+    writeU16(file, 0);
+    writeU32(file, 54);
+
+    writeU32(file, 40);
+    writeU32(file, width);
+    writeU32(file, height);
+    writeU16(file, 1);
+    writeU16(file, 24);
+    writeU32(file, 0);
+    writeU32(file, imageSize);
+    writeU32(file, 2835);
+    writeU32(file, 2835);
+    writeU32(file, 0);
+    writeU32(file, 0);
+
+    std::vector<char> padding(rowStride - width * 3U, 0);
+    for (std::size_t y = height_; y > 0; --y) {
+        const std::size_t sourceY = y - 1;
+        for (std::size_t x = 0; x < width_; ++x) {
+            const auto color = paletteColor(pixels_[sourceY * width_ + x]);
+            const char bgr[] = {
+                static_cast<char>(color.b),
+                static_cast<char>(color.g),
+                static_cast<char>(color.r)
+            };
+            file.write(bgr, sizeof(bgr));
+        }
+        if (!padding.empty()) {
+            file.write(padding.data(), static_cast<std::streamsize>(padding.size()));
+        }
+    }
+}
+
 bool PixelMap::setPixel(std::size_t x, std::size_t y, std::uint8_t color, PixelChange& change) {
     if (!isInBounds(x, y) || color >= paletteSize_) {
         return false;
@@ -209,6 +290,18 @@ bool PixelMap::setPixel(std::size_t x, std::size_t y, std::uint8_t color, PixelC
     }
     cacheDirty_ = cacheDirty_ || changed;
     return true;
+}
+
+void PixelMap::reset(std::uint8_t color) {
+    if (color >= paletteSize_) {
+        color = 0;
+    }
+
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+    std::fill(pixels_.begin(), pixels_.end(), color);
+    ++sequence_;
+    changes_.clear();
+    cacheDirty_ = true;
 }
 
 std::string PixelMap::toJson(std::optional<std::uint64_t> since) const {

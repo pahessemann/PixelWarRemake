@@ -270,6 +270,11 @@ a {
   color: var(--muted);
 }
 
+.danger-button {
+  border-color: rgba(239, 68, 68, 0.55);
+  color: #fecaca;
+}
+
 .ghost-link {
   min-height: 32px;
   display: inline-flex;
@@ -556,7 +561,7 @@ a {
 
 .admin-stats {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -577,6 +582,22 @@ a {
 .admin-stat strong {
   font-size: 22px;
   overflow-wrap: anywhere;
+}
+
+.admin-actions,
+.admin-row-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-actions {
+  justify-content: flex-start;
+}
+
+.admin-row-actions {
+  min-width: 180px;
 }
 
 .admin-table-wrap {

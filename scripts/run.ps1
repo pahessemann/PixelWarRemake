@@ -1,7 +1,7 @@
 param(
     [string]$BuildDir = "build",
     [string]$Config = "Debug",
-    [string]$ConfigFile = "config/server.example.json"
+    [string]$ConfigFile = ""
 )
 
 $ToolBin = Join-Path (Get-Location) ".tools\w64devkit\bin"
@@ -14,5 +14,12 @@ if (-not (Test-Path $exe)) {
     $exe = Join-Path $BuildDir "$Config/pixelwar_server.exe"
 }
 
-& $exe $ConfigFile
+if ([string]::IsNullOrWhiteSpace($ConfigFile)) {
+    if (Test-Path "config/server.json") {
+        $ConfigFile = "config/server.json"
+    } else {
+        $ConfigFile = "config/server.example.json"
+    }
+}
 
+& $exe $ConfigFile

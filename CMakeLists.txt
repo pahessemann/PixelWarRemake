@@ -24,6 +24,7 @@ add_library(pixelwar_core
     src/security/PasswordHasher.cpp
     src/security/RateLimiter.cpp
     src/security/SessionManager.cpp
+    src/storage/MapBackup.cpp
     src/storage/PixelMap.cpp
     src/storage/UserStore.cpp
     src/utils/Base64.cpp

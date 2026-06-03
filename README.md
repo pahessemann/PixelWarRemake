@@ -19,6 +19,7 @@ Serveur Web C++20 pour une carte de pixels persistante. Les utilisateurs se conn
 - Documentation OpenAPI dans `docs/openapi.yaml`.
 - Frontend web servi par le binaire C++: canvas pixel map, auth, palette, cooldown, zoom et refresh automatique.
 - Panel administrateur cache sur `/gestion`, protege par token Bearer Discord et `admin_discord_id`.
+- Backups serveur horaires de la map, backups manuels, rollback et reset avec screenshot BMP final.
 
 ## Build
 
@@ -75,8 +76,18 @@ Pour activer Discord:
 
 1. Creer une application dans le Discord Developer Portal.
 2. Ajouter l'URL de redirection exacte: `http://127.0.0.1:8080/auth/discord/callback` en local.
-3. Renseigner `discord_client_id` et `discord_client_secret` dans `config/server.json`, ou utiliser les variables d'environnement `PIXELWAR_DISCORD_CLIENT_ID` et `PIXELWAR_DISCORD_CLIENT_SECRET`.
-4. Pour proteger `/gestion` par ton vrai compte Discord, renseigner `admin_discord_id` ou `PIXELWAR_ADMIN_DISCORD_ID`.
+3. Generer la config locale ignoree par Git:
+
+```powershell
+.\scripts\configure-discord.ps1 `
+  -DiscordClientId "TON_CLIENT_ID" `
+  -DiscordClientSecret "TON_CLIENT_SECRET" `
+  -AdminDiscordId "TON_ID_DISCORD"
+```
+
+4. Relancer avec `.\scripts\run.cmd`. Le script utilise `config/server.json` automatiquement s'il existe.
+
+Tu peux aussi renseigner `discord_client_id` et `discord_client_secret` dans `config/server.json`, ou utiliser les variables d'environnement `PIXELWAR_DISCORD_CLIENT_ID` et `PIXELWAR_DISCORD_CLIENT_SECRET`. Pour proteger `/gestion` par ton vrai compte Discord, renseigner `admin_discord_id` ou `PIXELWAR_ADMIN_DISCORD_ID`.
 
 Les routes `POST /register` et `POST /login` repondent `410` volontairement: les comptes ne sont plus crees par mot de passe.
 Au demarrage, les anciennes entrees password-only de `data/users.db` ne sont pas chargees. Seuls les comptes avec une identite OAuth Discord valide restent utilisables.
@@ -131,11 +142,13 @@ Le dossier `public/` contient l'interface web servie par le serveur C++:
 - `admin.html`: panel de gestion accessible via `/gestion`.
 - `styles.css`: interface responsive.
 - `app.js`: auth Discord, rendu canvas, decode RLE, diffs, cooldown et pose de pixel.
-- `admin.js`: statistiques admin, liste utilisateurs et reset cooldown.
+- `admin.js`: statistiques admin, liste utilisateurs, backups, rollback, reset carte et reset cooldown.
 
 Le navigateur appelle `/map` au chargement puis toutes les 60 secondes. Les clics sur le canvas envoient `POST /pixel` avec le token Bearer courant.
 
 Le panel `/gestion` n'est pas lie depuis l'interface publique. Il utilise le token de session Discord stocke par l'interface et refuse tout compte qui ne correspond pas a `admin_discord_id`. Si `admin_discord_id` est vide, `admin_username` reste un fallback, mais seulement pour un compte Discord charge.
+
+Le serveur cree un backup de la map toutes les heures dans `data/backups`. Depuis `/gestion`, un administrateur peut creer un backup manuel, restaurer un backup, ou reset la carte. Avant chaque reset et rollback, un backup de securite est cree; le reset genere aussi un screenshot BMP de l'etat final avant remise a zero.
 
 ## Tests
 

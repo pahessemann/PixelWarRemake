@@ -4,9 +4,11 @@
 #include "pixelwar/utils/HttpsClient.hpp"
 #include "pixelwar/utils/Json.hpp"
 #include "pixelwar/utils/Random.hpp"
+#include "pixelwar/storage/MapBackup.hpp"
 
 #include <charconv>
 #include <chrono>
+#include <fstream>
 #include <optional>
 #include <filesystem>
 #include <memory>
@@ -369,6 +371,54 @@ std::string adminUsersJson(const std::vector<storage::AdminUserView>& users) {
     return out.str();
 }
 
+std::string backupEntryJson(const storage::MapBackupEntry& backup) {
+    std::ostringstream out;
+    out << R"({"id":")" << utils::json::escape(backup.id) << '"'
+        << R"(,"created_at":)" << backup.createdAt
+        << R"(,"reason":")" << utils::json::escape(backup.reason) << '"'
+        << R"(,"sequence":)" << backup.sequence
+        << R"(,"bytes":)" << backup.bytes
+        << R"(,"screenshot":)" << (backup.screenshot ? "true" : "false")
+        << '}';
+    return out.str();
+}
+
+std::string backupsJson(const std::vector<storage::MapBackupEntry>& backups) {
+    std::ostringstream out;
+    out << R"({"backups":[)";
+    for (std::size_t i = 0; i < backups.size(); ++i) {
+        if (i != 0) {
+            out << ',';
+        }
+        out << backupEntryJson(backups[i]);
+    }
+    out << "]}";
+    return out.str();
+}
+
+HttpResponse binaryFileResponse(const std::filesystem::path& path, const std::string& contentType) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        return jsonError(404, "not_found");
+    }
+
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+
+    HttpResponse response;
+    response.status = 200;
+    response.body = buffer.str();
+    response.headers["Content-Type"] = contentType;
+    response.headers["Cache-Control"] = "no-store";
+    response.headers["Server"] = "PixelWarRemake";
+    response.headers["Connection"] = "close";
+    response.headers["Access-Control-Allow-Origin"] = "*";
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization";
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
+    response.headers["Content-Disposition"] = "inline; filename=\"" + path.filename().string() + "\"";
+    return response;
+}
+
 } // namespace
 
 void registerApiRoutes(
@@ -578,6 +628,102 @@ void registerApiRoutes(
         }
 
         return HttpResponse::json(200, R"({"status":"reset"})");
+    });
+
+    router.add("GET", "/admin/backups", [&userStore, &sessions, &cfg](const HttpRequest& request) {
+        if (auto error = adminGuard(request, userStore, sessions, cfg)) {
+            return *error;
+        }
+
+        return HttpResponse::json(200, backupsJson(storage::listMapBackups(cfg.dataDir)));
+    });
+
+    router.add("POST", "/admin/backups/create", [&pixelMap, &userStore, &sessions, &cfg](const HttpRequest& request) {
+        if (auto error = adminGuard(request, userStore, sessions, cfg)) {
+            return *error;
+        }
+
+        const auto body = parseJsonBody(request);
+        const std::string reason = body ? utils::json::getString(*body, "reason").value_or("manual") : "manual";
+        const bool includeScreenshot = body ? utils::json::getBool(*body, "screenshot").value_or(false) : false;
+
+        try {
+            const auto backup = storage::createMapBackup(pixelMap, cfg.dataDir, reason, includeScreenshot);
+            return HttpResponse::json(200, R"({"backup":)" + backupEntryJson(backup) + "}");
+        } catch (const std::exception&) {
+            return jsonError(500, "backup_failed");
+        }
+    });
+
+    router.add("POST", "/admin/backups/rollback", [&pixelMap, &userStore, &sessions, &cfg, mapPath](const HttpRequest& request) {
+        if (auto error = adminGuard(request, userStore, sessions, cfg)) {
+            return *error;
+        }
+
+        const auto body = parseJsonBody(request);
+        if (!body) {
+            return jsonError(400, "invalid_json");
+        }
+
+        const auto id = utils::json::getString(*body, "id");
+        if (!id || !storage::findMapBackup(cfg.dataDir, *id)) {
+            return jsonError(404, "backup_not_found");
+        }
+
+        try {
+            const auto beforeRollback = storage::createMapBackup(pixelMap, cfg.dataDir, "before-rollback", true);
+            if (!storage::restoreMapBackup(pixelMap, cfg.dataDir, *id, mapPath)) {
+                return jsonError(500, "rollback_failed");
+            }
+            return HttpResponse::json(
+                200,
+                R"({"status":"rolled_back","restored_id":")" + utils::json::escape(*id) +
+                    R"(","safety_backup":)" + backupEntryJson(beforeRollback) + "}"
+            );
+        } catch (const std::exception&) {
+            return jsonError(500, "rollback_failed");
+        }
+    });
+
+    router.add("POST", "/admin/map/reset", [&pixelMap, &userStore, &sessions, &cfg, mapPath](const HttpRequest& request) {
+        if (auto error = adminGuard(request, userStore, sessions, cfg)) {
+            return *error;
+        }
+
+        const auto body = parseJsonBody(request);
+        const auto color = body ? utils::json::getInt(*body, "color").value_or(0) : 0;
+        if (color < 0 || color >= cfg.paletteSize) {
+            return jsonError(400, "invalid_color");
+        }
+
+        try {
+            const auto finalBackup = storage::createMapBackup(pixelMap, cfg.dataDir, "before-reset", true);
+            pixelMap.reset(static_cast<std::uint8_t>(color));
+            pixelMap.saveBinary(mapPath);
+            return HttpResponse::json(
+                200,
+                R"({"status":"reset","final_backup":)" + backupEntryJson(finalBackup) + "}"
+            );
+        } catch (const std::exception&) {
+            return jsonError(500, "reset_failed");
+        }
+    });
+
+    router.add("GET", "/admin/backups/screenshot", [&userStore, &sessions, &cfg](const HttpRequest& request) {
+        if (auto error = adminGuard(request, userStore, sessions, cfg)) {
+            return *error;
+        }
+
+        const auto id = request.queryValue("id");
+        if (!id) {
+            return jsonError(400, "missing_backup_id");
+        }
+
+        const auto path = storage::mapBackupScreenshotPath(cfg.dataDir, *id);
+        if (!path) {
+            return jsonError(404, "screenshot_not_found");
+        }
+        return binaryFileResponse(*path, "image/bmp");
     });
 }
 

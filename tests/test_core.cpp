@@ -7,6 +7,7 @@
 #include "pixelwar/security/PasswordHasher.hpp"
 #include "pixelwar/security/RateLimiter.hpp"
 #include "pixelwar/security/SessionManager.hpp"
+#include "pixelwar/storage/MapBackup.hpp"
 #include "pixelwar/models/User.hpp"
 #include "pixelwar/config/ServerConfig.hpp"
 #include "pixelwar/controllers/ApiController.hpp"
@@ -86,6 +87,37 @@ TEST_CASE("pixel map returns diffs") {
     REQUIRE(diff.find(R"("type":"full")") != std::string::npos);
     const auto diff2 = map.toJson(1);
     REQUIRE(diff2.find(R"("type":"diff")") != std::string::npos);
+}
+
+TEST_CASE("map backups create screenshots and restore map state") {
+    const auto dir = std::filesystem::current_path() / "map_backups_test";
+    std::filesystem::remove_all(dir);
+
+    pixelwar::storage::PixelMap map(4, 4, 16);
+    pixelwar::storage::PixelChange change;
+    REQUIRE(map.setPixel(1, 1, 3, change));
+    REQUIRE(map.sequence() == 1);
+
+    const auto backup = pixelwar::storage::createMapBackup(map, dir, "manual", true);
+    REQUIRE(!backup.id.empty());
+    REQUIRE(backup.sequence == 1);
+    REQUIRE(backup.screenshot);
+    REQUIRE(pixelwar::storage::mapBackupFilePath(dir, backup.id).has_value());
+    REQUIRE(pixelwar::storage::mapBackupScreenshotPath(dir, backup.id).has_value());
+
+    const auto backups = pixelwar::storage::listMapBackups(dir);
+    REQUIRE(backups.size() == 1);
+    REQUIRE(backups.front().id == backup.id);
+
+    const auto liveMapPath = dir / "map.pwm";
+    map.reset(0);
+    map.saveBinary(liveMapPath);
+    REQUIRE(map.sequence() == 2);
+
+    REQUIRE(pixelwar::storage::restoreMapBackup(map, dir, backup.id, liveMapPath));
+    REQUIRE(map.sequence() == 1);
+
+    std::filesystem::remove_all(dir);
 }
 
 TEST_CASE("user store allows three pixels per cooldown window") {
@@ -208,6 +240,52 @@ TEST_CASE("api disables password register and login routes") {
     REQUIRE(legacyCooldown.body.find("discord_auth_required") != std::string::npos);
 
     std::filesystem::remove(path);
+}
+
+TEST_CASE("admin api manages map backups and reset") {
+    const auto dir = std::filesystem::current_path() / "admin_backup_api_test";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+
+    pixelwar::http::Router router;
+    pixelwar::storage::PixelMap map(4, 4, 16);
+    pixelwar::storage::UserStore store(dir / "users.db");
+    const auto adminUserId = store.upsertOAuthUser("discord", "admin-subject", "Admin User", "admin@example.test");
+    pixelwar::security::SessionManager sessions(std::chrono::seconds(60));
+    const auto token = sessions.createSession(adminUserId);
+    pixelwar::security::RateLimiter limiter;
+    pixelwar::config::ServerConfig cfg;
+    cfg.dataDir = dir;
+    cfg.adminUsername = "admin_user";
+
+    pixelwar::controllers::registerApiRoutes(router, map, store, sessions, limiter, cfg);
+
+    pixelwar::http::HttpRequest request;
+    request.method = "POST";
+    request.path = "/admin/backups/create";
+    request.headers["authorization"] = "Bearer " + token;
+    request.body = R"({"reason":"manual","screenshot":true})";
+    const auto createResponse = router.dispatch(request);
+    REQUIRE(createResponse.status == 200);
+    REQUIRE(createResponse.body.find(R"("screenshot":true)") != std::string::npos);
+
+    request.method = "GET";
+    request.path = "/admin/backups";
+    request.body.clear();
+    const auto listResponse = router.dispatch(request);
+    REQUIRE(listResponse.status == 200);
+    REQUIRE(listResponse.body.find(R"("backups":[)") != std::string::npos);
+    REQUIRE(listResponse.body.find("manual") != std::string::npos);
+
+    request.method = "POST";
+    request.path = "/admin/map/reset";
+    request.body = R"({"color":0})";
+    const auto resetResponse = router.dispatch(request);
+    REQUIRE(resetResponse.status == 200);
+    REQUIRE(resetResponse.body.find(R"("status":"reset")") != std::string::npos);
+    REQUIRE(resetResponse.body.find("before-reset") != std::string::npos);
+
+    std::filesystem::remove_all(dir);
 }
 
 TEST_CASE("static controller serves frontend") {
