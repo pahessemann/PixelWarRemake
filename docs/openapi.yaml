@@ -19,48 +19,43 @@ paths:
           description: Palette entries
   /register:
     post:
-      summary: Create a user account
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [username, password]
-              properties:
-                username:
-                  type: string
-                password:
-                  type: string
-                  format: password
+      summary: Disabled local account creation
       responses:
-        "201":
-          description: Account created
-        "400":
-          description: Invalid payload
-        "409":
-          description: Username already exists
+        "410":
+          description: Discord OAuth is required
   /login:
     post:
-      summary: Authenticate and obtain a session token
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [username, password]
-              properties:
-                username:
-                  type: string
-                password:
-                  type: string
-                  format: password
+      summary: Disabled password login
+      responses:
+        "410":
+          description: Discord OAuth is required
+  /auth/discord/status:
+    get:
+      summary: Discord OAuth configuration status
       responses:
         "200":
-          description: Session token
-        "401":
-          description: Invalid credentials
+          description: Whether Discord login is configured
+  /auth/discord:
+    get:
+      summary: Redirect to Discord OAuth2 authorization
+      responses:
+        "302":
+          description: Redirect to Discord
+  /auth/discord/callback:
+    get:
+      summary: Discord OAuth2 callback
+      parameters:
+        - name: code
+          in: query
+          schema:
+            type: string
+        - name: state
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: HTML page that stores the PixelWar session token and redirects home
   /map:
     get:
       summary: Read the pixel map or a diff

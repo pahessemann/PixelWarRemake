@@ -181,6 +181,34 @@ a {
   overflow-wrap: anywhere;
 }
 
+.oauth-card {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: #11161e;
+}
+
+.oauth-card span,
+.auth-note {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.auth-link {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.disabled-link {
+  opacity: 0.55;
+  pointer-events: auto;
+  cursor: not-allowed;
+}
+
 .segment {
   min-height: 36px;
   color: var(--muted);

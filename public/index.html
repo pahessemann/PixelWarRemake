@@ -7,7 +7,7 @@
   <title>PixelWarRemake</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="manifest" href="/site.webmanifest">
-  <link rel="stylesheet" href="/styles.css?v=admin-v1">
+  <link rel="stylesheet" href="/styles.css?v=discord-auth-v1">
 </head>
 <body>
   <div class="app-shell">
@@ -39,22 +39,11 @@
             <strong id="connectedUsername">-</strong>
           </div>
 
-          <div id="authTabs" class="segmented" role="tablist" aria-label="Mode compte">
-            <button id="loginMode" class="segment active" type="button">Login</button>
-            <button id="registerMode" class="segment" type="button">Register</button>
+          <div id="discordAuth" class="oauth-card">
+            <span>Connexion obligatoire avec un compte Discord valide.</span>
+            <a id="discordLoginLink" class="primary-button auth-link" href="/auth/discord">Connexion Discord</a>
+            <p id="discordConfigNotice" class="auth-note hidden">Discord OAuth n'est pas encore configure cote serveur.</p>
           </div>
-
-          <form id="authForm" class="form-grid" autocomplete="on">
-            <label>
-              <span>Username</span>
-              <input id="usernameInput" name="username" type="text" minlength="3" maxlength="32" autocomplete="username" required>
-            </label>
-            <label>
-              <span>Password</span>
-              <input id="passwordInput" name="password" type="password" minlength="8" maxlength="256" autocomplete="current-password" required>
-            </label>
-            <button id="authSubmit" class="primary-button" type="submit">Login</button>
-          </form>
         </section>
 
         <section class="palette-section">
@@ -114,6 +103,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=admin-v1" defer></script>
+  <script src="/app.js?v=discord-auth-v1" defer></script>
 </body>
 </html>

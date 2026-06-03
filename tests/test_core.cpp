@@ -8,6 +8,8 @@
 #include "pixelwar/security/RateLimiter.hpp"
 #include "pixelwar/security/SessionManager.hpp"
 #include "pixelwar/models/User.hpp"
+#include "pixelwar/config/ServerConfig.hpp"
+#include "pixelwar/controllers/ApiController.hpp"
 #include "pixelwar/controllers/StaticController.hpp"
 #include "pixelwar/http/Router.hpp"
 #include "pixelwar/storage/PixelMap.hpp"
@@ -112,6 +114,60 @@ TEST_CASE("user store allows three pixels per cooldown window") {
     status = store.pixelQuotaStatus(*userId, 600, 3);
     REQUIRE(status.remainingPlacements == 3);
     REQUIRE(status.remainingSeconds == 0);
+
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("oauth users are created without local password registration") {
+    const auto path = std::filesystem::current_path() / "oauth_users_test.db";
+    std::filesystem::remove(path);
+
+    pixelwar::storage::UserStore store(path);
+    const auto userId = store.upsertOAuthUser("discord", "123456789", "Discord User", "user@example.test");
+    REQUIRE(userId > 0);
+
+    const auto user = store.findById(userId);
+    REQUIRE(user.has_value());
+    REQUIRE(user->oauthProvider == "discord");
+    REQUIRE(user->oauthSubject == "123456789");
+    REQUIRE(user->email == "user@example.test");
+    REQUIRE(user->passwordHash.empty());
+
+    const auto sameUserId = store.upsertOAuthUser("discord", "123456789", "Another Name", "next@example.test");
+    REQUIRE(sameUserId == userId);
+
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("api disables password register and login routes") {
+    const auto path = std::filesystem::current_path() / "api_users_test.db";
+    std::filesystem::remove(path);
+
+    pixelwar::http::Router router;
+    pixelwar::storage::PixelMap map(4, 4, 16);
+    pixelwar::storage::UserStore store(path);
+    pixelwar::security::SessionManager sessions(std::chrono::seconds(60));
+    pixelwar::security::RateLimiter limiter;
+    pixelwar::config::ServerConfig cfg;
+    cfg.dataDir = std::filesystem::current_path();
+
+    pixelwar::controllers::registerApiRoutes(router, map, store, sessions, limiter, cfg);
+
+    pixelwar::http::HttpRequest request;
+    request.method = "POST";
+    request.path = "/register";
+    request.body = R"({"username":"paul","password":"motdepasse-solide"})";
+    REQUIRE(router.dispatch(request).status == 410);
+
+    request.path = "/login";
+    REQUIRE(router.dispatch(request).status == 410);
+
+    request.method = "GET";
+    request.path = "/auth/discord/status";
+    request.body.clear();
+    const auto status = router.dispatch(request);
+    REQUIRE(status.status == 200);
+    REQUIRE(status.body.find(R"("enabled":false)") != std::string::npos);
 
     std::filesystem::remove(path);
 }

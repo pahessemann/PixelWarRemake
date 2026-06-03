@@ -10,5 +10,10 @@
   "thread_pool_size": 8,
   "max_body_bytes": 8192,
   "admin_username": "pahessemann",
+  "admin_discord_id": "",
+  "public_base_url": "http://127.0.0.1:8080",
+  "discord_client_id": "",
+  "discord_client_secret": "",
+  "discord_redirect_path": "/auth/discord/callback",
   "data_dir": "data"
 }

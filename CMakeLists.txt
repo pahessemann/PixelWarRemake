@@ -29,6 +29,7 @@ add_library(pixelwar_core
     src/utils/Base64.cpp
     src/utils/Json.cpp
     src/utils/Random.cpp
+    src/utils/HttpsClient.cpp
     src/utils/Sha256.cpp
     src/utils/ThreadPool.cpp
 )
@@ -38,7 +39,7 @@ set_target_properties(pixelwar_core PROPERTIES CXX_SCAN_FOR_MODULES OFF)
 target_include_directories(pixelwar_core PUBLIC include)
 
 if (WIN32)
-    target_link_libraries(pixelwar_core PUBLIC ws2_32)
+    target_link_libraries(pixelwar_core PUBLIC ws2_32 winhttp)
 endif()
 
 if (MSVC)

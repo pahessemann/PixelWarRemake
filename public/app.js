@@ -3,7 +3,7 @@
 const state = {
   token: localStorage.getItem("pixelwar.token") || "",
   username: localStorage.getItem("pixelwar.username") || "",
-  mode: "login",
+  discordAuthEnabled: false,
   palette: [],
   selectedColor: 0,
   width: 1,
@@ -41,13 +41,9 @@ const els = {
   logoutButton: document.getElementById("logoutButton"),
   authConnected: document.getElementById("authConnected"),
   connectedUsername: document.getElementById("connectedUsername"),
-  authTabs: document.getElementById("authTabs"),
-  loginMode: document.getElementById("loginMode"),
-  registerMode: document.getElementById("registerMode"),
-  authForm: document.getElementById("authForm"),
-  authSubmit: document.getElementById("authSubmit"),
-  usernameInput: document.getElementById("usernameInput"),
-  passwordInput: document.getElementById("passwordInput"),
+  discordAuth: document.getElementById("discordAuth"),
+  discordLoginLink: document.getElementById("discordLoginLink"),
+  discordConfigNotice: document.getElementById("discordConfigNotice"),
   paletteGrid: document.getElementById("paletteGrid"),
   selectedColorLabel: document.getElementById("selectedColorLabel"),
   targetCellLabel: document.getElementById("targetCellLabel"),
@@ -78,34 +74,24 @@ function setStatus(text) {
   els.statusText.textContent = text;
 }
 
-function setMode(mode) {
-  state.mode = mode;
-  els.loginMode.classList.toggle("active", mode === "login");
-  els.registerMode.classList.toggle("active", mode === "register");
-  els.authSubmit.textContent = mode === "login" ? "Login" : "Register";
-  els.passwordInput.autocomplete = mode === "login" ? "current-password" : "new-password";
-}
-
 function updateAuthUi() {
   if (state.token) {
     const username = state.username || "Connecte";
     els.connectionLabel.textContent = `Connecté : ${username}`;
     els.connectedUsername.textContent = username;
     els.authConnected.classList.remove("hidden");
-    els.authTabs.classList.add("hidden");
-    els.authForm.classList.add("hidden");
+    els.discordAuth.classList.add("hidden");
     els.logoutButton.classList.remove("hidden");
   } else {
     els.connectionLabel.textContent = "Invite";
     els.connectedUsername.textContent = "-";
     els.authConnected.classList.add("hidden");
-    els.authTabs.classList.remove("hidden");
-    els.authForm.classList.remove("hidden");
+    els.discordAuth.classList.remove("hidden");
     els.logoutButton.classList.add("hidden");
-    els.authSubmit.disabled = false;
-    els.usernameInput.disabled = false;
-    els.passwordInput.disabled = false;
   }
+
+  els.discordLoginLink.classList.toggle("disabled-link", !state.discordAuthEnabled);
+  els.discordConfigNotice.classList.toggle("hidden", state.discordAuthEnabled);
 }
 
 async function api(path, options = {}) {
@@ -341,41 +327,18 @@ async function refreshCooldown() {
   }
 }
 
-async function submitAuth(event) {
-  event.preventDefault();
-  const username = els.usernameInput.value.trim();
-  const password = els.passwordInput.value;
-  if (!username || !password) {
-    return;
-  }
-
+async function loadAuthStatus() {
   try {
-    els.authSubmit.disabled = true;
-    setStatus(state.mode === "login" ? "Login" : "Register");
-
-    if (state.mode === "register") {
-      await api("/register", {
-        method: "POST",
-        body: JSON.stringify({ username, password })
-      });
+    const status = await api("/auth/discord/status");
+    state.discordAuthEnabled = Boolean(status.enabled);
+    if (status.login_url) {
+      els.discordLoginLink.href = status.login_url;
     }
-
-    const login = await api("/login", {
-      method: "POST",
-      body: JSON.stringify({ username, password })
-    });
-
-    state.token = login.token;
-    state.username = username;
-    localStorage.setItem("pixelwar.token", state.token);
-    localStorage.setItem("pixelwar.username", state.username);
-    els.passwordInput.value = "";
     updateAuthUi();
-    await refreshCooldown();
-    setStatus("Connecte");
   } catch (error) {
-    els.authSubmit.disabled = false;
-    setStatus(`Compte: ${error.message}`);
+    state.discordAuthEnabled = false;
+    updateAuthUi();
+    setStatus(`Discord: ${error.message}`);
   }
 }
 
@@ -728,13 +691,21 @@ function renderHighlights() {
 }
 
 async function init() {
+  const authError = new URLSearchParams(window.location.search).get("auth_error");
+  if (authError) {
+    setStatus(`Discord: ${authError}`);
+    window.history.replaceState({}, document.title, window.location.pathname);
+  }
+
   updateAuthUi();
-  setMode("login");
   updateCooldownUi();
 
-  els.loginMode.addEventListener("click", () => setMode("login"));
-  els.registerMode.addEventListener("click", () => setMode("register"));
-  els.authForm.addEventListener("submit", submitAuth);
+  els.discordLoginLink.addEventListener("click", (event) => {
+    if (!state.discordAuthEnabled) {
+      event.preventDefault();
+      setStatus("Discord OAuth non configure");
+    }
+  });
   els.logoutButton.addEventListener("click", logout);
   els.refreshButton.addEventListener("click", refreshMap);
   els.placeButton.addEventListener("click", () => placeSelectedPixel(state.selectedColor));
@@ -755,10 +726,13 @@ async function init() {
   window.addEventListener("resize", refreshViewportAroundCurrentCell);
 
   try {
+    await loadAuthStatus();
     await loadPalette();
     await loadMap(true);
     await refreshCooldown();
-    setStatus("Pret");
+    if (!authError) {
+      setStatus("Pret");
+    }
   } catch (error) {
     setStatus(`Init: ${error.message}`);
   }

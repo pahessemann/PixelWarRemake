@@ -4,6 +4,7 @@
 #include "pixelwar/utils/Base64.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <fstream>
 #include <limits>
@@ -64,6 +65,86 @@ std::optional<std::uint32_t> parseUint32(const std::string& text) {
     return static_cast<std::uint32_t>(*value);
 }
 
+std::string oauthKey(const std::string& provider, const std::string& subject) {
+    return provider + ":" + subject;
+}
+
+std::string decodeBase64Text(const std::string& encoded) {
+    const auto bytes = utils::base64Decode(encoded);
+    if (!bytes) {
+        return {};
+    }
+    return std::string(bytes->begin(), bytes->end());
+}
+
+std::string encodeText(const std::string& text) {
+    return utils::base64Encode(std::vector<std::uint8_t>(text.begin(), text.end()));
+}
+
+std::string sanitizeUsername(const std::string& preferred, const std::string& subject) {
+    std::string out;
+    out.reserve(preferred.size());
+
+    for (const unsigned char c : preferred) {
+        if (std::isalnum(c) || c == '_' || c == '-') {
+            out.push_back(static_cast<char>(std::tolower(c)));
+        } else if (c == ' ' || c == '.') {
+            out.push_back('_');
+        }
+    }
+
+    while (!out.empty() && out.front() == '_') {
+        out.erase(out.begin());
+    }
+    while (!out.empty() && out.back() == '_') {
+        out.pop_back();
+    }
+
+    if (out.size() < 3) {
+        out = "discord_" + subject.substr(subject.size() > 8 ? subject.size() - 8 : 0);
+    }
+    if (out.size() > 24) {
+        out.resize(24);
+    }
+    return out;
+}
+
+std::string uniqueUsername(
+    const std::string& preferred,
+    const std::string& subject,
+    const std::unordered_map<std::string, std::uint64_t>& existing
+) {
+    std::string username = sanitizeUsername(preferred, subject);
+    if (existing.find(username) == existing.end()) {
+        return username;
+    }
+
+    const std::string suffix = "_" + subject.substr(subject.size() > 6 ? subject.size() - 6 : 0);
+    const std::size_t maxBase = 32 > suffix.size() ? 32 - suffix.size() : 16;
+    if (username.size() > maxBase) {
+        username.resize(maxBase);
+    }
+    username += suffix;
+
+    if (existing.find(username) == existing.end()) {
+        return username;
+    }
+
+    for (int i = 2; i < 1000; ++i) {
+        std::string candidate = username;
+        const std::string number = "_" + std::to_string(i);
+        if (candidate.size() + number.size() > 32) {
+            candidate.resize(32 - number.size());
+        }
+        candidate += number;
+        if (existing.find(candidate) == existing.end()) {
+            return candidate;
+        }
+    }
+
+    return "discord_" + std::to_string(existing.size() + 1);
+}
+
 } // namespace
 
 UserStore::UserStore(std::filesystem::path path) : path_(std::move(path)) {}
@@ -77,6 +158,7 @@ bool UserStore::load() {
 
     usersById_.clear();
     userIdsByName_.clear();
+    userIdsByOAuth_.clear();
     nextId_ = 1;
 
     std::string line;
@@ -86,20 +168,22 @@ bool UserStore::load() {
         }
 
         const auto parts = splitTabs(line);
-        if (parts.size() != 4 && parts.size() != 6) {
+        if (parts.size() != 4 && parts.size() != 6 && parts.size() != 9) {
             continue;
         }
 
         const auto id = parseUint64(parts[0]);
-        const auto usernameBytes = utils::base64Decode(parts[1]);
         const auto lastPixel = parseInt64(parts[3]);
-        if (!id || !usernameBytes || !lastPixel) {
+        if (!id || !lastPixel) {
             continue;
         }
 
         models::User user;
         user.id = *id;
-        user.username.assign(usernameBytes->begin(), usernameBytes->end());
+        user.username = decodeBase64Text(parts[1]);
+        if (user.username.empty()) {
+            continue;
+        }
         user.passwordHash = parts[2];
         user.lastPixelTimestamp = *lastPixel;
         user.pixelWindowStartTimestamp = *lastPixel;
@@ -115,7 +199,16 @@ bool UserStore::load() {
             user.pixelsPlacedInWindow = *placedInWindow;
         }
 
+        if (parts.size() == 9) {
+            user.oauthProvider = decodeBase64Text(parts[6]);
+            user.oauthSubject = decodeBase64Text(parts[7]);
+            user.email = decodeBase64Text(parts[8]);
+        }
+
         userIdsByName_[user.username] = user.id;
+        if (!user.oauthProvider.empty() && !user.oauthSubject.empty()) {
+            userIdsByOAuth_[oauthKey(user.oauthProvider, user.oauthSubject)] = user.id;
+        }
         usersById_[user.id] = std::move(user);
         nextId_ = std::max(nextId_, *id + 1);
     }
@@ -134,13 +227,15 @@ void UserStore::save() const {
     }
 
     for (const auto& [id, user] : usersById_) {
-        const std::vector<std::uint8_t> usernameBytes(user.username.begin(), user.username.end());
         file << id << '\t'
-             << utils::base64Encode(usernameBytes) << '\t'
+             << encodeText(user.username) << '\t'
              << user.passwordHash << '\t'
              << user.lastPixelTimestamp << '\t'
              << user.pixelWindowStartTimestamp << '\t'
-             << user.pixelsPlacedInWindow << '\n';
+             << user.pixelsPlacedInWindow << '\t'
+             << encodeText(user.oauthProvider) << '\t'
+             << encodeText(user.oauthSubject) << '\t'
+             << encodeText(user.email) << '\n';
     }
 }
 
@@ -199,6 +294,50 @@ std::optional<std::uint64_t> UserStore::verifyCredentials(const std::string& use
     if (!security::PasswordHasher::verifyPassword(password, hash)) {
         return std::nullopt;
     }
+    return userId;
+}
+
+std::uint64_t UserStore::upsertOAuthUser(
+    const std::string& provider,
+    const std::string& subject,
+    const std::string& preferredUsername,
+    const std::string& email
+) {
+    std::uint64_t userId = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto existing = userIdsByOAuth_.find(oauthKey(provider, subject));
+        if (existing != userIdsByOAuth_.end()) {
+            const auto userIt = usersById_.find(existing->second);
+            if (userIt != usersById_.end()) {
+                userIt->second.email = email;
+                if (!preferredUsername.empty()) {
+                    userIt->second.username = userIt->second.username.empty()
+                        ? uniqueUsername(preferredUsername, subject, userIdsByName_)
+                        : userIt->second.username;
+                }
+                userId = userIt->second.id;
+            }
+        } else {
+            models::User user;
+            user.id = nextId_++;
+            user.username = uniqueUsername(preferredUsername, subject, userIdsByName_);
+            user.passwordHash = "";
+            user.oauthProvider = provider;
+            user.oauthSubject = subject;
+            user.email = email;
+            user.lastPixelTimestamp = 0;
+            user.pixelWindowStartTimestamp = 0;
+            user.pixelsPlacedInWindow = 0;
+
+            userIdsByName_[user.username] = user.id;
+            userIdsByOAuth_[oauthKey(provider, subject)] = user.id;
+            userId = user.id;
+            usersById_[user.id] = std::move(user);
+        }
+    }
+
+    save();
     return userId;
 }
 

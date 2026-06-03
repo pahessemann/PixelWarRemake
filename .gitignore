@@ -1,6 +1,7 @@
 build/
 out/
 data/
+config/server.json
 .tools/
 w64devkit/
 w64devkit-x64-*.7z.exe

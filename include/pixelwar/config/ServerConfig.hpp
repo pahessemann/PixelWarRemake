@@ -19,6 +19,11 @@ struct ServerConfig {
     std::size_t threadPoolSize = 8;
     std::size_t maxBodyBytes = 8192;
     std::string adminUsername = "pahessemann";
+    std::string adminDiscordId;
+    std::string publicBaseUrl = "http://127.0.0.1:8080";
+    std::string discordClientId;
+    std::string discordClientSecret;
+    std::string discordRedirectPath = "/auth/discord/callback";
     std::filesystem::path dataDir = "data";
 };
 

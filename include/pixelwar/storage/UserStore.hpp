@@ -35,6 +35,12 @@ public:
 
     bool registerUser(const std::string& username, const std::string& password, std::string& error);
     std::optional<std::uint64_t> verifyCredentials(const std::string& username, const std::string& password);
+    std::uint64_t upsertOAuthUser(
+        const std::string& provider,
+        const std::string& subject,
+        const std::string& preferredUsername,
+        const std::string& email
+    );
     std::optional<models::User> findById(std::uint64_t id) const;
     std::size_t userCount() const;
     std::vector<AdminUserView> adminUsers() const;
@@ -55,6 +61,7 @@ private:
     mutable std::mutex mutex_;
     std::unordered_map<std::uint64_t, models::User> usersById_;
     std::unordered_map<std::string, std::uint64_t> userIdsByName_;
+    std::unordered_map<std::string, std::uint64_t> userIdsByOAuth_;
     std::uint64_t nextId_ = 1;
 };
 

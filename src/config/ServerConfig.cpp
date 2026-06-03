@@ -3,6 +3,7 @@
 #include "pixelwar/utils/Json.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <optional>
 #include <sstream>
@@ -34,6 +35,14 @@ std::int64_t positiveIntOr(std::optional<std::int64_t> value, std::int64_t fallb
         return fallback;
     }
     return *value;
+}
+
+std::optional<std::string> envString(const char* name) {
+    const char* value = std::getenv(name);
+    if (!value || *value == '\0') {
+        return std::nullopt;
+    }
+    return std::string(value);
 }
 
 } // namespace
@@ -72,6 +81,21 @@ ServerConfig loadServerConfig(const std::filesystem::path& path) {
     if (auto adminUsername = utils::json::getString(*parsed, "admin_username")) {
         cfg.adminUsername = *adminUsername;
     }
+    if (auto adminDiscordId = utils::json::getString(*parsed, "admin_discord_id")) {
+        cfg.adminDiscordId = *adminDiscordId;
+    }
+    if (auto publicBaseUrl = utils::json::getString(*parsed, "public_base_url")) {
+        cfg.publicBaseUrl = *publicBaseUrl;
+    }
+    if (auto clientId = utils::json::getString(*parsed, "discord_client_id")) {
+        cfg.discordClientId = *clientId;
+    }
+    if (auto clientSecret = utils::json::getString(*parsed, "discord_client_secret")) {
+        cfg.discordClientSecret = *clientSecret;
+    }
+    if (auto redirectPath = utils::json::getString(*parsed, "discord_redirect_path")) {
+        cfg.discordRedirectPath = *redirectPath;
+    }
     if (auto paletteSize = utils::json::getInt(*parsed, "palette_size")) {
         if (*paletteSize > 0 && *paletteSize <= 256) {
             cfg.paletteSize = static_cast<std::uint8_t>(*paletteSize);
@@ -79,6 +103,19 @@ ServerConfig loadServerConfig(const std::filesystem::path& path) {
     }
     if (auto dataDir = utils::json::getString(*parsed, "data_dir")) {
         cfg.dataDir = *dataDir;
+    }
+
+    if (auto value = envString("PIXELWAR_PUBLIC_BASE_URL")) {
+        cfg.publicBaseUrl = *value;
+    }
+    if (auto value = envString("PIXELWAR_DISCORD_CLIENT_ID")) {
+        cfg.discordClientId = *value;
+    }
+    if (auto value = envString("PIXELWAR_DISCORD_CLIENT_SECRET")) {
+        cfg.discordClientSecret = *value;
+    }
+    if (auto value = envString("PIXELWAR_ADMIN_DISCORD_ID")) {
+        cfg.adminDiscordId = *value;
     }
 
     return cfg;

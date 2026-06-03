@@ -1,13 +1,19 @@
 #include "pixelwar/controllers/ApiController.hpp"
 
+#include "pixelwar/utils/Base64.hpp"
+#include "pixelwar/utils/HttpsClient.hpp"
 #include "pixelwar/utils/Json.hpp"
+#include "pixelwar/utils/Random.hpp"
 
 #include <charconv>
 #include <chrono>
 #include <optional>
 #include <filesystem>
+#include <memory>
+#include <mutex>
 #include <sstream>
 #include <system_error>
+#include <unordered_map>
 #include <vector>
 
 namespace pixelwar::controllers {
@@ -21,6 +27,45 @@ HttpResponse jsonError(int status, const std::string& code) {
     return HttpResponse::json(status, R"({"error":")" + pixelwar::utils::json::escape(code) + R"("})");
 }
 
+std::int64_t nowSeconds() {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()
+    ).count();
+}
+
+class OAuthStateStore {
+public:
+    std::string create() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const std::string state = utils::base64UrlEncode(utils::randomBytes(32));
+        states_[state] = nowSeconds() + 600;
+        return state;
+    }
+
+    bool consume(const std::string& state) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto now = nowSeconds();
+        for (auto it = states_.begin(); it != states_.end();) {
+            if (it->second <= now) {
+                it = states_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+
+        const auto it = states_.find(state);
+        if (it == states_.end()) {
+            return false;
+        }
+        states_.erase(it);
+        return true;
+    }
+
+private:
+    std::mutex mutex_;
+    std::unordered_map<std::string, std::int64_t> states_;
+};
+
 std::optional<std::uint64_t> parseUint64(const std::string& text) {
     std::uint64_t value = 0;
     const auto* begin = text.data();
@@ -30,6 +75,165 @@ std::optional<std::uint64_t> parseUint64(const std::string& text) {
         return std::nullopt;
     }
     return value;
+}
+
+bool isDiscordOAuthConfigured(const config::ServerConfig& cfg) {
+    return !cfg.discordClientId.empty() && !cfg.discordClientSecret.empty() && !cfg.publicBaseUrl.empty();
+}
+
+std::string trimTrailingSlash(std::string value) {
+    while (!value.empty() && value.back() == '/') {
+        value.pop_back();
+    }
+    return value;
+}
+
+std::string discordRedirectUri(const config::ServerConfig& cfg) {
+    return trimTrailingSlash(cfg.publicBaseUrl) + cfg.discordRedirectPath;
+}
+
+std::string urlEncode(const std::string& value) {
+    std::ostringstream out;
+    constexpr char hex[] = "0123456789ABCDEF";
+    for (const unsigned char c : value) {
+        if ((c >= 'A' && c <= 'Z') ||
+            (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '~') {
+            out << static_cast<char>(c);
+        } else {
+            out << '%' << hex[(c >> 4) & 0xF] << hex[c & 0xF];
+        }
+    }
+    return out.str();
+}
+
+std::string formBody(const std::unordered_map<std::string, std::string>& values) {
+    std::ostringstream out;
+    bool first = true;
+    for (const auto& [key, value] : values) {
+        if (!first) {
+            out << '&';
+        }
+        first = false;
+        out << urlEncode(key) << '=' << urlEncode(value);
+    }
+    return out.str();
+}
+
+HttpResponse redirectTo(const std::string& location) {
+    auto response = HttpResponse::text(302, "");
+    response.headers["Location"] = location;
+    return response;
+}
+
+HttpResponse htmlResponse(std::string body) {
+    auto response = HttpResponse::text(200, std::move(body));
+    response.headers["Content-Type"] = "text/html; charset=utf-8";
+    return response;
+}
+
+HttpResponse authResultHtml(const std::string& token, const std::string& username) {
+    std::ostringstream out;
+    out << "<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\">"
+        << "<title>Connexion Discord</title></head><body>"
+        << "<script>"
+        << "localStorage.setItem('pixelwar.token',\"" << utils::json::escape(token) << "\");"
+        << "localStorage.setItem('pixelwar.username',\"" << utils::json::escape(username) << "\");"
+        << "location.replace('/');"
+        << "</script>"
+        << "Connexion Discord terminee."
+        << "</body></html>";
+    return htmlResponse(out.str());
+}
+
+HttpResponse authErrorHtml(const std::string& code) {
+    std::ostringstream out;
+    out << "<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\">"
+        << "<title>Connexion Discord</title></head><body>"
+        << "<script>"
+        << "localStorage.removeItem('pixelwar.token');"
+        << "localStorage.removeItem('pixelwar.username');"
+        << "location.replace('/?auth_error=" << urlEncode(code) << "');"
+        << "</script>"
+        << "Connexion Discord impossible."
+        << "</body></html>";
+    return htmlResponse(out.str());
+}
+
+struct DiscordToken {
+    std::string accessToken;
+};
+
+struct DiscordUser {
+    std::string id;
+    std::string username;
+    std::string email;
+};
+
+std::optional<DiscordToken> exchangeDiscordCode(const config::ServerConfig& cfg, const std::string& code) {
+    const std::string body = formBody({
+        {"client_id", cfg.discordClientId},
+        {"client_secret", cfg.discordClientSecret},
+        {"grant_type", "authorization_code"},
+        {"code", code},
+        {"redirect_uri", discordRedirectUri(cfg)}
+    });
+
+    const auto response = utils::httpsRequest(
+        "POST",
+        "discord.com",
+        "/api/oauth2/token",
+        {
+            {"Content-Type", "application/x-www-form-urlencoded"},
+            {"Accept", "application/json"}
+        },
+        body
+    );
+    if (response.status < 200 || response.status >= 300) {
+        return std::nullopt;
+    }
+
+    const auto parsed = utils::json::parseObject(response.body);
+    if (!parsed) {
+        return std::nullopt;
+    }
+
+    const auto accessToken = utils::json::getString(*parsed, "access_token");
+    if (!accessToken || accessToken->empty()) {
+        return std::nullopt;
+    }
+    return DiscordToken{*accessToken};
+}
+
+std::optional<DiscordUser> fetchDiscordUser(const std::string& accessToken) {
+    const auto response = utils::httpsRequest(
+        "GET",
+        "discord.com",
+        "/api/users/@me",
+        {
+            {"Authorization", "Bearer " + accessToken},
+            {"Accept", "application/json"}
+        },
+        ""
+    );
+    if (response.status < 200 || response.status >= 300) {
+        return std::nullopt;
+    }
+
+    const auto parsed = utils::json::parseObject(response.body);
+    if (!parsed) {
+        return std::nullopt;
+    }
+
+    const auto id = utils::json::getString(*parsed, "id");
+    const auto username = utils::json::getString(*parsed, "username");
+    if (!id || id->empty() || !username || username->empty()) {
+        return std::nullopt;
+    }
+
+    const auto email = utils::json::getString(*parsed, "email").value_or("");
+    return DiscordUser{*id, *username, email};
 }
 
 std::optional<std::string> tokenFromRequest(const HttpRequest& request, const std::optional<pixelwar::utils::json::Object>& body = std::nullopt) {
@@ -109,7 +313,16 @@ std::optional<HttpResponse> adminGuard(
     }
 
     const auto user = userStore.findById(*userId);
-    if (!user || user->username != cfg.adminUsername) {
+    if (!user) {
+        return jsonError(403, "forbidden");
+    }
+    if (!cfg.adminDiscordId.empty()) {
+        if (user->oauthProvider != "discord" || user->oauthSubject != cfg.adminDiscordId) {
+            return jsonError(403, "forbidden");
+        }
+        return std::nullopt;
+    }
+    if (user->username != cfg.adminUsername) {
         return jsonError(403, "forbidden");
     }
 
@@ -146,6 +359,7 @@ void registerApiRoutes(
     const config::ServerConfig& cfg
 ) {
     const auto mapPath = cfg.dataDir / "map.pwm";
+    const auto oauthStates = std::make_shared<OAuthStateStore>();
 
     router.add("GET", "/health", [&pixelMap](const HttpRequest&) {
         std::ostringstream out;
@@ -157,56 +371,65 @@ void registerApiRoutes(
         return HttpResponse::json(200, paletteJson(cfg.paletteSize));
     });
 
-    router.add("POST", "/register", [&userStore, &rateLimiter](const HttpRequest& request) {
-        if (!rateLimiter.allow("register:" + request.remoteAddress, 20, std::chrono::minutes(1))) {
-            return jsonError(429, "rate_limited");
-        }
-
-        const auto body = parseJsonBody(request);
-        if (!body) {
-            return jsonError(400, "invalid_json");
-        }
-
-        const auto username = utils::json::getString(*body, "username");
-        const auto password = utils::json::getString(*body, "password");
-        if (!username || !password) {
-            return jsonError(400, "missing_credentials");
-        }
-
-        std::string error;
-        if (!userStore.registerUser(*username, *password, error)) {
-            return jsonError(error == "username_exists" ? 409 : 400, error);
-        }
-
-        return HttpResponse::json(201, R"({"status":"created"})");
+    router.add("GET", "/auth/discord/status", [&cfg](const HttpRequest&) {
+        std::ostringstream out;
+        out << R"({"enabled":)" << (isDiscordOAuthConfigured(cfg) ? "true" : "false")
+            << R"(,"login_url":"/auth/discord"})";
+        return HttpResponse::json(200, out.str());
     });
 
-    router.add("POST", "/login", [&userStore, &sessions, &rateLimiter, &cfg](const HttpRequest& request) {
-        if (!rateLimiter.allow("login:" + request.remoteAddress, 10, std::chrono::minutes(1))) {
-            return jsonError(429, "rate_limited");
+    router.add("GET", "/auth/discord", [&cfg, oauthStates](const HttpRequest&) {
+        if (!isDiscordOAuthConfigured(cfg)) {
+            return authErrorHtml("discord_not_configured");
         }
 
-        const auto body = parseJsonBody(request);
-        if (!body) {
-            return jsonError(400, "invalid_json");
+        const std::string state = oauthStates->create();
+        const std::string url = "https://discord.com/oauth2/authorize"
+            "?response_type=code"
+            "&client_id=" + urlEncode(cfg.discordClientId) +
+            "&scope=" + urlEncode("identify email") +
+            "&redirect_uri=" + urlEncode(discordRedirectUri(cfg)) +
+            "&state=" + urlEncode(state);
+        return redirectTo(url);
+    });
+
+    router.add("GET", cfg.discordRedirectPath, [&userStore, &sessions, &cfg, oauthStates](const HttpRequest& request) {
+        if (const auto error = request.queryValue("error")) {
+            return authErrorHtml(*error);
         }
 
-        const auto username = utils::json::getString(*body, "username");
-        const auto password = utils::json::getString(*body, "password");
-        if (!username || !password) {
-            return jsonError(400, "missing_credentials");
+        const auto code = request.queryValue("code");
+        const auto state = request.queryValue("state");
+        if (!code || !state || !oauthStates->consume(*state)) {
+            return authErrorHtml("invalid_oauth_state");
         }
 
-        const auto userId = userStore.verifyCredentials(*username, *password);
-        if (!userId) {
-            return jsonError(401, "invalid_credentials");
+        const auto discordToken = exchangeDiscordCode(cfg, *code);
+        if (!discordToken) {
+            return authErrorHtml("discord_token_exchange_failed");
         }
 
-        const std::string token = sessions.createSession(*userId);
-        return HttpResponse::json(
-            200,
-            R"({"token":")" + utils::json::escape(token) + R"(","expires_in_seconds":)" + std::to_string(cfg.sessionTtlSeconds) + "}"
-        );
+        const auto discordUser = fetchDiscordUser(discordToken->accessToken);
+        if (!discordUser) {
+            return authErrorHtml("discord_user_fetch_failed");
+        }
+
+        const auto userId = userStore.upsertOAuthUser("discord", discordUser->id, discordUser->username, discordUser->email);
+        const auto localUser = userStore.findById(userId);
+        if (!localUser) {
+            return authErrorHtml("local_user_failed");
+        }
+
+        const std::string token = sessions.createSession(userId);
+        return authResultHtml(token, localUser->username);
+    });
+
+    router.add("POST", "/register", [](const HttpRequest&) {
+        return jsonError(410, "discord_auth_required");
+    });
+
+    router.add("POST", "/login", [](const HttpRequest&) {
+        return jsonError(410, "discord_auth_required");
     });
 
     router.add("GET", "/map", [&pixelMap](const HttpRequest& request) {

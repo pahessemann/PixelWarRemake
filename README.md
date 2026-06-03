@@ -2,12 +2,13 @@
 
 ![Interface PixelWarRemake](docs/pixelwar-demo.png)
 
-Serveur Web C++20 pour une carte de pixels persistante. Les utilisateurs peuvent s'inscrire, se connecter, poser un pixel toutes les 10 minutes, lire la carte complete ou recuperer un diff depuis une sequence connue.
+Serveur Web C++20 pour une carte de pixels persistante. Les utilisateurs se connectent avec Discord, posent des pixels sous quota/cooldown, lisent la carte complete ou recuperent un diff depuis une sequence connue.
 
 ## Fonctionnalites
 
 - Serveur HTTP self-contained en C++20 avec thread pool.
-- API REST JSON: `/register`, `/login`, `/map`, `/pixel`, `/cooldown`.
+- API REST JSON: `/auth/discord`, `/map`, `/pixel`, `/cooldown`.
+- Creation de compte uniquement via Discord OAuth2.
 - Sessions par token Bearer avec expiration.
 - Hashage des mots de passe PBKDF2-HMAC-SHA256 avec sel aleatoire.
 - Cooldown strict cote serveur.
@@ -61,22 +62,31 @@ Copier `config/server.example.json` vers `config/server.json`, puis ajuster:
   "thread_pool_size": 8,
   "max_body_bytes": 8192,
   "admin_username": "pahessemann",
+  "admin_discord_id": "",
+  "public_base_url": "http://127.0.0.1:8080",
+  "discord_client_id": "",
+  "discord_client_secret": "",
+  "discord_redirect_path": "/auth/discord/callback",
   "data_dir": "data"
 }
 ```
 
+Pour activer Discord:
+
+1. Creer une application dans le Discord Developer Portal.
+2. Ajouter l'URL de redirection exacte: `http://127.0.0.1:8080/auth/discord/callback` en local.
+3. Renseigner `discord_client_id` et `discord_client_secret` dans `config/server.json`, ou utiliser les variables d'environnement `PIXELWAR_DISCORD_CLIENT_ID` et `PIXELWAR_DISCORD_CLIENT_SECRET`.
+4. Pour proteger `/gestion` par ton vrai compte Discord, renseigner `admin_discord_id` ou `PIXELWAR_ADMIN_DISCORD_ID`.
+
+Les routes `POST /register` et `POST /login` repondent `410` volontairement: les comptes ne sont plus crees par mot de passe.
+
 ## Exemples API
 
 ```bash
-curl -X POST http://localhost:8080/register \
-  -H "Content-Type: application/json" \
-  -d '{"username":"paul","password":"motdepasse-solide"}'
-
-TOKEN=$(curl -s -X POST http://localhost:8080/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"paul","password":"motdepasse-solide"}' | jq -r .token)
-
 curl http://localhost:8080/map
+
+# Apres connexion Discord dans le navigateur, recuperer le token de session PixelWarRemake.
+TOKEN="..."
 
 curl -X POST http://localhost:8080/pixel \
   -H "Authorization: Bearer $TOKEN" \
@@ -119,7 +129,7 @@ Le dossier `public/` contient l'interface web servie par le serveur C++:
 - `index.html`: structure de l'application.
 - `admin.html`: panel de gestion accessible via `/gestion`.
 - `styles.css`: interface responsive.
-- `app.js`: auth, rendu canvas, decode RLE, diffs, cooldown et pose de pixel.
+- `app.js`: auth Discord, rendu canvas, decode RLE, diffs, cooldown et pose de pixel.
 - `admin.js`: statistiques admin, liste utilisateurs et reset cooldown.
 
 Le navigateur appelle `/map` au chargement puis toutes les 60 secondes. Les clics sur le canvas envoient `POST /pixel` avec le token Bearer courant.
