@@ -1,5 +1,7 @@
 # PixelWarRemake
 
+![Interface PixelWarRemake](docs/pixelwar-demo.png)
+
 Serveur Web C++20 pour une carte de pixels persistante. Les utilisateurs peuvent s'inscrire, se connecter, poser un pixel toutes les 10 minutes, lire la carte complete ou recuperer un diff depuis une sequence connue.
 
 ## Fonctionnalites
