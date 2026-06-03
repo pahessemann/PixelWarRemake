@@ -296,28 +296,49 @@ std::string quotaJson(const storage::PixelQuotaStatus& status, std::int64_t cool
     return out.str();
 }
 
+std::optional<HttpResponse> discordSessionGuard(
+    const HttpRequest& request,
+    const storage::UserStore& userStore,
+    pixelwar::security::SessionManager& sessions,
+    std::uint64_t& userId,
+    const std::optional<pixelwar::utils::json::Object>& body = std::nullopt
+) {
+    const auto token = tokenFromRequest(request, body);
+    if (!token) {
+        return jsonError(401, "missing_token");
+    }
+
+    const auto sessionUserId = sessions.validate(*token);
+    if (!sessionUserId) {
+        return jsonError(401, "invalid_token");
+    }
+
+    const auto user = userStore.findById(*sessionUserId);
+    if (!user || user->oauthProvider != "discord" || user->oauthSubject.empty()) {
+        return jsonError(403, "discord_auth_required");
+    }
+
+    userId = *sessionUserId;
+    return std::nullopt;
+}
+
 std::optional<HttpResponse> adminGuard(
     const HttpRequest& request,
     const storage::UserStore& userStore,
     pixelwar::security::SessionManager& sessions,
     const config::ServerConfig& cfg
 ) {
-    const auto token = tokenFromRequest(request);
-    if (!token) {
-        return jsonError(401, "missing_token");
+    std::uint64_t userId = 0;
+    if (auto error = discordSessionGuard(request, userStore, sessions, userId)) {
+        return *error;
     }
 
-    const auto userId = sessions.validate(*token);
-    if (!userId) {
-        return jsonError(401, "invalid_token");
-    }
-
-    const auto user = userStore.findById(*userId);
+    const auto user = userStore.findById(userId);
     if (!user) {
         return jsonError(403, "forbidden");
     }
     if (!cfg.adminDiscordId.empty()) {
-        if (user->oauthProvider != "discord" || user->oauthSubject != cfg.adminDiscordId) {
+        if (user->oauthSubject != cfg.adminDiscordId) {
             return jsonError(403, "forbidden");
         }
         return std::nullopt;
@@ -449,17 +470,12 @@ void registerApiRoutes(
             return jsonError(400, "invalid_json");
         }
 
-        const auto token = tokenFromRequest(request, body);
-        if (!token) {
-            return jsonError(401, "missing_token");
+        std::uint64_t userId = 0;
+        if (auto error = discordSessionGuard(request, userStore, sessions, userId, body)) {
+            return *error;
         }
 
-        const auto userId = sessions.validate(*token);
-        if (!userId) {
-            return jsonError(401, "invalid_token");
-        }
-
-        if (!rateLimiter.allow("pixel:" + *token, 120, std::chrono::minutes(1))) {
+        if (!rateLimiter.allow("pixel:" + std::to_string(userId), 120, std::chrono::minutes(1))) {
             return jsonError(429, "rate_limited");
         }
 
@@ -474,7 +490,7 @@ void registerApiRoutes(
         }
 
         storage::PixelQuotaStatus quotaStatus;
-        if (!userStore.consumePixelSlot(*userId, cfg.cooldownSeconds, cfg.pixelQuotaPerCooldown, quotaStatus)) {
+        if (!userStore.consumePixelSlot(userId, cfg.cooldownSeconds, cfg.pixelQuotaPerCooldown, quotaStatus)) {
             return HttpResponse::json(
                 429,
                 R"({"error":"cooldown_active","remaining_seconds":)" + std::to_string(quotaStatus.remainingSeconds) +
@@ -506,17 +522,12 @@ void registerApiRoutes(
     });
 
     router.add("GET", "/cooldown", [&userStore, &sessions, &cfg](const HttpRequest& request) {
-        const auto token = tokenFromRequest(request);
-        if (!token) {
-            return jsonError(401, "missing_token");
+        std::uint64_t userId = 0;
+        if (auto error = discordSessionGuard(request, userStore, sessions, userId)) {
+            return *error;
         }
 
-        const auto userId = sessions.validate(*token);
-        if (!userId) {
-            return jsonError(401, "invalid_token");
-        }
-
-        const auto status = userStore.pixelQuotaStatus(*userId, cfg.cooldownSeconds, cfg.pixelQuotaPerCooldown);
+        const auto status = userStore.pixelQuotaStatus(userId, cfg.cooldownSeconds, cfg.pixelQuotaPerCooldown);
         return HttpResponse::json(200, quotaJson(status, cfg.cooldownSeconds));
     });
 

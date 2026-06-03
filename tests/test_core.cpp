@@ -20,6 +20,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -92,26 +93,24 @@ TEST_CASE("user store allows three pixels per cooldown window") {
     std::filesystem::remove(path);
 
     pixelwar::storage::UserStore store(path);
-    std::string error;
-    REQUIRE(store.registerUser("quota_user", "motdepasse-solide", error));
-    const auto userId = store.verifyCredentials("quota_user", "motdepasse-solide");
-    REQUIRE(userId.has_value());
+    const auto userId = store.upsertOAuthUser("discord", "quota-subject", "quota_user", "quota@example.test");
+    REQUIRE(userId > 0);
 
-    auto status = store.pixelQuotaStatus(*userId, 600, 3);
+    auto status = store.pixelQuotaStatus(userId, 600, 3);
     REQUIRE(status.remainingPlacements == 3);
 
-    REQUIRE(store.consumePixelSlot(*userId, 600, 3, status));
+    REQUIRE(store.consumePixelSlot(userId, 600, 3, status));
     REQUIRE(status.remainingPlacements == 2);
-    REQUIRE(store.consumePixelSlot(*userId, 600, 3, status));
+    REQUIRE(store.consumePixelSlot(userId, 600, 3, status));
     REQUIRE(status.remainingPlacements == 1);
-    REQUIRE(store.consumePixelSlot(*userId, 600, 3, status));
+    REQUIRE(store.consumePixelSlot(userId, 600, 3, status));
     REQUIRE(status.remainingPlacements == 0);
-    REQUIRE(!store.consumePixelSlot(*userId, 600, 3, status));
+    REQUIRE(!store.consumePixelSlot(userId, 600, 3, status));
     REQUIRE(status.remainingPlacements == 0);
     REQUIRE(status.remainingSeconds > 0);
 
-    REQUIRE(store.resetPixelQuota(*userId));
-    status = store.pixelQuotaStatus(*userId, 600, 3);
+    REQUIRE(store.resetPixelQuota(userId));
+    status = store.pixelQuotaStatus(userId, 600, 3);
     REQUIRE(status.remainingPlacements == 3);
     REQUIRE(status.remainingSeconds == 0);
 
@@ -123,6 +122,9 @@ TEST_CASE("oauth users are created without local password registration") {
     std::filesystem::remove(path);
 
     pixelwar::storage::UserStore store(path);
+    REQUIRE(store.upsertOAuthUser("google", "google-123", "Google User", "google@example.test") == 0);
+    REQUIRE(store.userCount() == 0);
+
     const auto userId = store.upsertOAuthUser("discord", "123456789", "Discord User", "user@example.test");
     REQUIRE(userId > 0);
 
@@ -135,6 +137,34 @@ TEST_CASE("oauth users are created without local password registration") {
 
     const auto sameUserId = store.upsertOAuthUser("discord", "123456789", "Another Name", "next@example.test");
     REQUIRE(sameUserId == userId);
+
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("user store ignores legacy password accounts on load") {
+    const auto path = std::filesystem::current_path() / "legacy_users_test.db";
+    std::filesystem::remove(path);
+
+    {
+        std::ofstream file(path, std::ios::trunc);
+        file << "1\tbGVnYWN5\toldhash\t0\t0\t0\n";
+        file << "2\tZGlzY29yZF91c2Vy\t\t0\t0\t0\tZGlzY29yZA==\tMTIz\tZGlzY29yZEBleGFtcGxlLnRlc3Q=\n";
+    }
+
+    pixelwar::storage::UserStore store(path);
+    REQUIRE(store.load());
+    REQUIRE(store.userCount() == 1);
+
+    const auto discordUser = store.findById(2);
+    REQUIRE(discordUser.has_value());
+    REQUIRE(discordUser->username == "discord_user");
+    REQUIRE(discordUser->oauthProvider == "discord");
+    REQUIRE(discordUser->oauthSubject == "123");
+
+    std::string error;
+    REQUIRE(!store.registerUser("legacy", "motdepasse-solide", error));
+    REQUIRE(error == "discord_auth_required");
+    REQUIRE(!store.verifyCredentials("discord_user", "motdepasse-solide").has_value());
 
     std::filesystem::remove(path);
 }
@@ -168,6 +198,14 @@ TEST_CASE("api disables password register and login routes") {
     const auto status = router.dispatch(request);
     REQUIRE(status.status == 200);
     REQUIRE(status.body.find(R"("enabled":false)") != std::string::npos);
+
+    const auto legacyToken = sessions.createSession(999);
+    request.method = "GET";
+    request.path = "/cooldown";
+    request.headers["authorization"] = "Bearer " + legacyToken;
+    const auto legacyCooldown = router.dispatch(request);
+    REQUIRE(legacyCooldown.status == 403);
+    REQUIRE(legacyCooldown.body.find("discord_auth_required") != std::string::npos);
 
     std::filesystem::remove(path);
 }

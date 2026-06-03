@@ -10,15 +10,15 @@ Serveur Web C++20 pour une carte de pixels persistante. Les utilisateurs se conn
 - API REST JSON: `/auth/discord`, `/map`, `/pixel`, `/cooldown`.
 - Creation de compte uniquement via Discord OAuth2.
 - Sessions par token Bearer avec expiration.
-- Hashage des mots de passe PBKDF2-HMAC-SHA256 avec sel aleatoire.
+- Aucun mot de passe local stocke; les comptes legacy sans Discord sont ignores au chargement.
 - Cooldown strict cote serveur.
 - Pixel map en memoire protegee par `std::shared_mutex`.
 - Persistance binaire de la map avec encodage RLE.
 - Cache en memoire de la derniere map compressee.
-- Rate limiting simple pour login, register et placement de pixels.
+- Rate limiting simple pour le placement de pixels.
 - Documentation OpenAPI dans `docs/openapi.yaml`.
 - Frontend web servi par le binaire C++: canvas pixel map, auth, palette, cooldown, zoom et refresh automatique.
-- Panel administrateur cache sur `/gestion`, protege par token Bearer et `admin_username`.
+- Panel administrateur cache sur `/gestion`, protege par token Bearer Discord et `admin_discord_id`.
 
 ## Build
 
@@ -79,6 +79,7 @@ Pour activer Discord:
 4. Pour proteger `/gestion` par ton vrai compte Discord, renseigner `admin_discord_id` ou `PIXELWAR_ADMIN_DISCORD_ID`.
 
 Les routes `POST /register` et `POST /login` repondent `410` volontairement: les comptes ne sont plus crees par mot de passe.
+Au demarrage, les anciennes entrees password-only de `data/users.db` ne sont pas chargees. Seuls les comptes avec une identite OAuth Discord valide restent utilisables.
 
 ## Exemples API
 
@@ -134,7 +135,7 @@ Le dossier `public/` contient l'interface web servie par le serveur C++:
 
 Le navigateur appelle `/map` au chargement puis toutes les 60 secondes. Les clics sur le canvas envoient `POST /pixel` avec le token Bearer courant.
 
-Le panel `/gestion` n'est pas lie depuis l'interface publique. Il utilise le token de session stocke par le login normal et refuse tout compte dont le username ne correspond pas a `admin_username`.
+Le panel `/gestion` n'est pas lie depuis l'interface publique. Il utilise le token de session Discord stocke par l'interface et refuse tout compte qui ne correspond pas a `admin_discord_id`. Si `admin_discord_id` est vide, `admin_username` reste un fallback, mais seulement pour un compte Discord charge.
 
 ## Tests
 

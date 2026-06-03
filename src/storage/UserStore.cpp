@@ -1,6 +1,5 @@
 #include "pixelwar/storage/UserStore.hpp"
 
-#include "pixelwar/security/PasswordHasher.hpp"
 #include "pixelwar/utils/Base64.hpp"
 
 #include <algorithm>
@@ -168,7 +167,7 @@ bool UserStore::load() {
         }
 
         const auto parts = splitTabs(line);
-        if (parts.size() != 4 && parts.size() != 6 && parts.size() != 9) {
+        if (parts.size() != 9) {
             continue;
         }
 
@@ -186,23 +185,19 @@ bool UserStore::load() {
         }
         user.passwordHash = parts[2];
         user.lastPixelTimestamp = *lastPixel;
-        user.pixelWindowStartTimestamp = *lastPixel;
-        user.pixelsPlacedInWindow = *lastPixel > 0 ? 1 : 0;
-
-        if (parts.size() == 6) {
-            const auto windowStart = parseInt64(parts[4]);
-            const auto placedInWindow = parseUint32(parts[5]);
-            if (!windowStart || !placedInWindow) {
-                continue;
-            }
-            user.pixelWindowStartTimestamp = *windowStart;
-            user.pixelsPlacedInWindow = *placedInWindow;
+        const auto windowStart = parseInt64(parts[4]);
+        const auto placedInWindow = parseUint32(parts[5]);
+        if (!windowStart || !placedInWindow) {
+            continue;
         }
+        user.pixelWindowStartTimestamp = *windowStart;
+        user.pixelsPlacedInWindow = *placedInWindow;
 
-        if (parts.size() == 9) {
-            user.oauthProvider = decodeBase64Text(parts[6]);
-            user.oauthSubject = decodeBase64Text(parts[7]);
-            user.email = decodeBase64Text(parts[8]);
+        user.oauthProvider = decodeBase64Text(parts[6]);
+        user.oauthSubject = decodeBase64Text(parts[7]);
+        user.email = decodeBase64Text(parts[8]);
+        if (user.oauthProvider != "discord" || user.oauthSubject.empty()) {
+            continue;
         }
 
         userIdsByName_[user.username] = user.id;
@@ -227,6 +222,9 @@ void UserStore::save() const {
     }
 
     for (const auto& [id, user] : usersById_) {
+        if (user.oauthProvider != "discord" || user.oauthSubject.empty()) {
+            continue;
+        }
         file << id << '\t'
              << encodeText(user.username) << '\t'
              << user.passwordHash << '\t'
@@ -240,61 +238,16 @@ void UserStore::save() const {
 }
 
 bool UserStore::registerUser(const std::string& username, const std::string& password, std::string& error) {
-    if (!models::isValidUsername(username)) {
-        error = "invalid_username";
-        return false;
-    }
-    if (!models::isValidPassword(password)) {
-        error = "invalid_password";
-        return false;
-    }
-
-    const std::string passwordHash = security::PasswordHasher::hashPassword(password);
-
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (userIdsByName_.find(username) != userIdsByName_.end()) {
-            error = "username_exists";
-            return false;
-        }
-
-        models::User user;
-        user.id = nextId_++;
-        user.username = username;
-        user.passwordHash = passwordHash;
-        user.lastPixelTimestamp = 0;
-        user.pixelWindowStartTimestamp = 0;
-        user.pixelsPlacedInWindow = 0;
-
-        userIdsByName_[user.username] = user.id;
-        usersById_[user.id] = std::move(user);
-    }
-
-    save();
-    return true;
+    (void)username;
+    (void)password;
+    error = "discord_auth_required";
+    return false;
 }
 
 std::optional<std::uint64_t> UserStore::verifyCredentials(const std::string& username, const std::string& password) {
-    std::string hash;
-    std::uint64_t userId = 0;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        const auto idIt = userIdsByName_.find(username);
-        if (idIt == userIdsByName_.end()) {
-            return std::nullopt;
-        }
-        const auto userIt = usersById_.find(idIt->second);
-        if (userIt == usersById_.end()) {
-            return std::nullopt;
-        }
-        userId = userIt->second.id;
-        hash = userIt->second.passwordHash;
-    }
-
-    if (!security::PasswordHasher::verifyPassword(password, hash)) {
-        return std::nullopt;
-    }
-    return userId;
+    (void)username;
+    (void)password;
+    return std::nullopt;
 }
 
 std::uint64_t UserStore::upsertOAuthUser(
@@ -303,6 +256,10 @@ std::uint64_t UserStore::upsertOAuthUser(
     const std::string& preferredUsername,
     const std::string& email
 ) {
+    if (provider != "discord" || subject.empty()) {
+        return 0;
+    }
+
     std::uint64_t userId = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);

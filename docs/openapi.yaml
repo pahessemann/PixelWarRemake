@@ -95,6 +95,8 @@ paths:
           description: Pixel placed
         "401":
           description: Missing or invalid token
+        "403":
+          description: Discord OAuth account required
         "429":
           description: Cooldown still active
   /cooldown:
@@ -107,6 +109,8 @@ paths:
           description: Cooldown status
         "401":
           description: Missing or invalid token
+        "403":
+          description: Discord OAuth account required
   /admin/summary:
     get:
       summary: Admin dashboard summary
@@ -121,7 +125,7 @@ paths:
           description: Authenticated user is not the configured admin
   /admin/users:
     get:
-      summary: Admin user list without password hashes
+      summary: Admin Discord user list
       security:
         - bearerAuth: []
       responses:
