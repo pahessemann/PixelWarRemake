@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111827">
+  <title>Gestion - PixelWarRemake</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css?v=admin-v1">
+</head>
+<body>
+  <div class="app-shell admin-shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <h1>Gestion</h1>
+          <p id="adminStatus">Verification admin</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <a class="ghost-link" href="/">Carte</a>
+        <button id="adminRefreshButton" class="icon-button" type="button" title="Rafraichir" aria-label="Rafraichir">R</button>
+      </div>
+    </header>
+
+    <main class="admin-workspace">
+      <section class="admin-band">
+        <div class="admin-head">
+          <div>
+            <h2>Vue administrateur</h2>
+            <p>Statut serveur, regles de placement et comptes utilisateurs.</p>
+          </div>
+          <span id="adminName" class="metric">Admin -</span>
+        </div>
+
+        <div id="adminNotice" class="admin-notice hidden"></div>
+
+        <div class="admin-stats" aria-label="Statistiques">
+          <div class="admin-stat">
+            <span>Utilisateurs</span>
+            <strong id="usersCount">-</strong>
+          </div>
+          <div class="admin-stat">
+            <span>Carte</span>
+            <strong id="mapStats">-</strong>
+          </div>
+          <div class="admin-stat">
+            <span>Sequence</span>
+            <strong id="sequenceStats">-</strong>
+          </div>
+          <div class="admin-stat">
+            <span>Cooldown</span>
+            <strong id="rulesStats">-</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="admin-band">
+        <div class="admin-head">
+          <div>
+            <h2>Utilisateurs</h2>
+            <p>Les mots de passe et donnees sensibles ne sont pas exposes ici.</p>
+          </div>
+        </div>
+
+        <div class="admin-table-wrap">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Username</th>
+                <th>Dernier pixel</th>
+                <th>Fenetre cooldown</th>
+                <th>Placements</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="usersTableBody">
+              <tr>
+                <td colspan="6">Chargement</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/admin.js?v=admin-v1" defer></script>
+</body>
+</html>

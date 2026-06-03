@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <sstream>
 #include <system_error>
+#include <vector>
 
 namespace pixelwar::controllers {
 
@@ -88,6 +89,49 @@ std::string quotaJson(const storage::PixelQuotaStatus& status, std::int64_t cool
         << R"(,"quota":)" << status.quota
         << R"(,"cooldown_seconds":)" << cooldownSeconds
         << '}';
+    return out.str();
+}
+
+std::optional<HttpResponse> adminGuard(
+    const HttpRequest& request,
+    const storage::UserStore& userStore,
+    pixelwar::security::SessionManager& sessions,
+    const config::ServerConfig& cfg
+) {
+    const auto token = tokenFromRequest(request);
+    if (!token) {
+        return jsonError(401, "missing_token");
+    }
+
+    const auto userId = sessions.validate(*token);
+    if (!userId) {
+        return jsonError(401, "invalid_token");
+    }
+
+    const auto user = userStore.findById(*userId);
+    if (!user || user->username != cfg.adminUsername) {
+        return jsonError(403, "forbidden");
+    }
+
+    return std::nullopt;
+}
+
+std::string adminUsersJson(const std::vector<storage::AdminUserView>& users) {
+    std::ostringstream out;
+    out << R"({"users":[)";
+    for (std::size_t i = 0; i < users.size(); ++i) {
+        if (i != 0) {
+            out << ',';
+        }
+        const auto& user = users[i];
+        out << R"({"id":)" << user.id
+            << R"(,"username":")" << utils::json::escape(user.username) << '"'
+            << R"(,"last_pixel_timestamp":)" << user.lastPixelTimestamp
+            << R"(,"pixel_window_start_timestamp":)" << user.pixelWindowStartTimestamp
+            << R"(,"pixels_placed_in_window":)" << user.pixelsPlacedInWindow
+            << '}';
+    }
+    out << "]}";
     return out.str();
 }
 
@@ -251,6 +295,55 @@ void registerApiRoutes(
 
         const auto status = userStore.pixelQuotaStatus(*userId, cfg.cooldownSeconds, cfg.pixelQuotaPerCooldown);
         return HttpResponse::json(200, quotaJson(status, cfg.cooldownSeconds));
+    });
+
+    router.add("GET", "/admin/summary", [&pixelMap, &userStore, &sessions, &cfg](const HttpRequest& request) {
+        if (auto error = adminGuard(request, userStore, sessions, cfg)) {
+            return *error;
+        }
+
+        std::ostringstream out;
+        out << R"({"admin_username":")" << utils::json::escape(cfg.adminUsername) << '"'
+            << R"(,"users_count":)" << userStore.userCount()
+            << R"(,"map":{"width":)" << pixelMap.width()
+            << R"(,"height":)" << pixelMap.height()
+            << R"(,"sequence":)" << pixelMap.sequence()
+            << '}'
+            << R"(,"rules":{"cooldown_seconds":)" << cfg.cooldownSeconds
+            << R"(,"pixel_quota_per_cooldown":)" << cfg.pixelQuotaPerCooldown
+            << R"(,"palette_size":)" << static_cast<int>(cfg.paletteSize)
+            << "}}";
+        return HttpResponse::json(200, out.str());
+    });
+
+    router.add("GET", "/admin/users", [&userStore, &sessions, &cfg](const HttpRequest& request) {
+        if (auto error = adminGuard(request, userStore, sessions, cfg)) {
+            return *error;
+        }
+
+        return HttpResponse::json(200, adminUsersJson(userStore.adminUsers()));
+    });
+
+    router.add("POST", "/admin/users/reset-cooldown", [&userStore, &sessions, &cfg](const HttpRequest& request) {
+        if (auto error = adminGuard(request, userStore, sessions, cfg)) {
+            return *error;
+        }
+
+        const auto body = parseJsonBody(request);
+        if (!body) {
+            return jsonError(400, "invalid_json");
+        }
+
+        const auto userId = utils::json::getInt(*body, "user_id");
+        if (!userId || *userId <= 0) {
+            return jsonError(400, "invalid_user_id");
+        }
+
+        if (!userStore.resetPixelQuota(static_cast<std::uint64_t>(*userId))) {
+            return jsonError(404, "user_not_found");
+        }
+
+        return HttpResponse::json(200, R"({"status":"reset"})");
     });
 }
 

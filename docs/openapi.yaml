@@ -112,9 +112,57 @@ paths:
           description: Cooldown status
         "401":
           description: Missing or invalid token
+  /admin/summary:
+    get:
+      summary: Admin dashboard summary
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Server, map and rule summary
+        "401":
+          description: Missing or invalid token
+        "403":
+          description: Authenticated user is not the configured admin
+  /admin/users:
+    get:
+      summary: Admin user list without password hashes
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: User list
+        "401":
+          description: Missing or invalid token
+        "403":
+          description: Authenticated user is not the configured admin
+  /admin/users/reset-cooldown:
+    post:
+      summary: Reset one user's pixel cooldown window
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id:
+                  type: integer
+                  format: int64
+      responses:
+        "200":
+          description: Cooldown reset
+        "401":
+          description: Missing or invalid token
+        "403":
+          description: Authenticated user is not the configured admin
+        "404":
+          description: User not found
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
-

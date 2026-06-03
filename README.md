@@ -17,6 +17,7 @@ Serveur Web C++20 pour une carte de pixels persistante. Les utilisateurs peuvent
 - Rate limiting simple pour login, register et placement de pixels.
 - Documentation OpenAPI dans `docs/openapi.yaml`.
 - Frontend web servi par le binaire C++: canvas pixel map, auth, palette, cooldown, zoom et refresh automatique.
+- Panel administrateur cache sur `/gestion`, protege par token Bearer et `admin_username`.
 
 ## Build
 
@@ -55,7 +56,11 @@ Copier `config/server.example.json` vers `config/server.json`, puis ajuster:
   "map_height": 1000,
   "palette_size": 16,
   "cooldown_seconds": 600,
+  "pixel_quota_per_cooldown": 3,
+  "session_ttl_seconds": 86400,
   "thread_pool_size": 8,
+  "max_body_bytes": 8192,
+  "admin_username": "pahessemann",
   "data_dir": "data"
 }
 ```
@@ -112,10 +117,14 @@ Soit un diff si `GET /map?since=41` peut etre satisfait depuis l'historique en m
 Le dossier `public/` contient l'interface web servie par le serveur C++:
 
 - `index.html`: structure de l'application.
+- `admin.html`: panel de gestion accessible via `/gestion`.
 - `styles.css`: interface responsive.
 - `app.js`: auth, rendu canvas, decode RLE, diffs, cooldown et pose de pixel.
+- `admin.js`: statistiques admin, liste utilisateurs et reset cooldown.
 
 Le navigateur appelle `/map` au chargement puis toutes les 60 secondes. Les clics sur le canvas envoient `POST /pixel` avec le token Bearer courant.
+
+Le panel `/gestion` n'est pas lie depuis l'interface publique. Il utilise le token de session stocke par le login normal et refuse tout compte dont le username ne correspond pas a `admin_username`.
 
 ## Tests
 

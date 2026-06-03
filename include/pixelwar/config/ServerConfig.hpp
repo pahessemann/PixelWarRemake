@@ -18,6 +18,7 @@ struct ServerConfig {
     std::int64_t sessionTtlSeconds = 86400;
     std::size_t threadPoolSize = 8;
     std::size_t maxBodyBytes = 8192;
+    std::string adminUsername = "pahessemann";
     std::filesystem::path dataDir = "data";
 };
 

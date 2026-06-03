@@ -69,6 +69,9 @@ ServerConfig loadServerConfig(const std::filesystem::path& path) {
     cfg.sessionTtlSeconds = positiveIntOr(utils::json::getInt(*parsed, "session_ttl_seconds"), cfg.sessionTtlSeconds);
     cfg.threadPoolSize = positiveSizeOr(utils::json::getInt(*parsed, "thread_pool_size"), cfg.threadPoolSize);
     cfg.maxBodyBytes = positiveSizeOr(utils::json::getInt(*parsed, "max_body_bytes"), cfg.maxBodyBytes);
+    if (auto adminUsername = utils::json::getString(*parsed, "admin_username")) {
+        cfg.adminUsername = *adminUsername;
+    }
     if (auto paletteSize = utils::json::getInt(*parsed, "palette_size")) {
         if (*paletteSize > 0 && *paletteSize <= 256) {
             cfg.paletteSize = static_cast<std::uint8_t>(*paletteSize);

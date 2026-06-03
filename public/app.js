@@ -719,7 +719,7 @@ function renderHighlights() {
 
   if (state.targetCell) {
     const selected = colorFor(state.selectedColor);
-    highlightCtx.fillStyle = `${selected.hex}66`;
+    highlightCtx.fillStyle = selected.hex;
     highlightCtx.fillRect(state.targetCell.x, state.targetCell.y, 1, 1);
     highlightCtx.strokeStyle = "#f4c95d";
     highlightCtx.lineWidth = 1;

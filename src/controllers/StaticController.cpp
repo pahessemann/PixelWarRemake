@@ -62,6 +62,10 @@ void registerStaticRoutes(http::Router& router, std::filesystem::path publicDir)
     const std::unordered_map<std::string, std::filesystem::path> files = {
         {"/", "index.html"},
         {"/index.html", "index.html"},
+        {"/gestion", "admin.html"},
+        {"/gestion/", "admin.html"},
+        {"/admin.html", "admin.html"},
+        {"/admin.js", "admin.js"},
         {"/styles.css", "styles.css"},
         {"/app.js", "app.js"},
         {"/favicon.svg", "favicon.svg"},

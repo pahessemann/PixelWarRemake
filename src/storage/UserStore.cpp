@@ -211,6 +211,49 @@ std::optional<models::User> UserStore::findById(std::uint64_t id) const {
     return it->second;
 }
 
+std::size_t UserStore::userCount() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return usersById_.size();
+}
+
+std::vector<AdminUserView> UserStore::adminUsers() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<AdminUserView> users;
+    users.reserve(usersById_.size());
+
+    for (const auto& [id, user] : usersById_) {
+        users.push_back(AdminUserView{
+            id,
+            user.username,
+            user.lastPixelTimestamp,
+            user.pixelWindowStartTimestamp,
+            user.pixelsPlacedInWindow
+        });
+    }
+
+    std::sort(users.begin(), users.end(), [](const AdminUserView& lhs, const AdminUserView& rhs) {
+        return lhs.id < rhs.id;
+    });
+    return users;
+}
+
+bool UserStore::resetPixelQuota(std::uint64_t userId) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto it = usersById_.find(userId);
+        if (it == usersById_.end()) {
+            return false;
+        }
+
+        it->second.lastPixelTimestamp = 0;
+        it->second.pixelWindowStartTimestamp = 0;
+        it->second.pixelsPlacedInWindow = 0;
+    }
+
+    save();
+    return true;
+}
+
 PixelQuotaStatus UserStore::pixelQuotaStatus(std::uint64_t userId, std::int64_t cooldownSeconds, std::uint32_t quota) const {
     std::lock_guard<std::mutex> lock(mutex_);
     PixelQuotaStatus status;

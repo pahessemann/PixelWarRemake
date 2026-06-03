@@ -108,6 +108,11 @@ TEST_CASE("user store allows three pixels per cooldown window") {
     REQUIRE(status.remainingPlacements == 0);
     REQUIRE(status.remainingSeconds > 0);
 
+    REQUIRE(store.resetPixelQuota(*userId));
+    status = store.pixelQuotaStatus(*userId, 600, 3);
+    REQUIRE(status.remainingPlacements == 3);
+    REQUIRE(status.remainingSeconds == 0);
+
     std::filesystem::remove(path);
 }
 
@@ -122,4 +127,9 @@ TEST_CASE("static controller serves frontend") {
     const auto response = router.dispatch(request);
     REQUIRE(response.status == 200);
     REQUIRE(response.body.find("PixelWarRemake") != std::string::npos);
+
+    request.path = "/gestion";
+    const auto adminResponse = router.dispatch(request);
+    REQUIRE(adminResponse.status == 200);
+    REQUIRE(adminResponse.body.find("Gestion") != std::string::npos);
 }
