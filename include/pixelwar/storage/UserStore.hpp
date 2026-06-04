@@ -21,9 +21,20 @@ struct PixelQuotaStatus {
 struct AdminUserView {
     std::uint64_t id = 0;
     std::string username;
+    std::string email;
+    bool emailVerified = false;
     std::int64_t lastPixelTimestamp = 0;
     std::int64_t pixelWindowStartTimestamp = 0;
     std::uint32_t pixelsPlacedInWindow = 0;
+};
+
+struct RegistrationResult {
+    bool created = false;
+    std::uint64_t userId = 0;
+    std::string username;
+    std::string email;
+    std::string verificationToken;
+    std::string error;
 };
 
 class UserStore {
@@ -33,13 +44,15 @@ public:
     bool load();
     void save() const;
 
-    bool registerUser(
+    RegistrationResult registerUser(
         const std::string& username,
         const std::string& email,
         const std::string& password,
-        std::string& error
+        bool requireEmailVerification,
+        std::int64_t verificationTtlSeconds
     );
     std::optional<std::uint64_t> verifyCredentials(const std::string& login, const std::string& password);
+    bool verifyEmailToken(const std::string& token, std::uint64_t& userId);
     std::optional<models::User> findById(std::uint64_t id) const;
     std::size_t userCount() const;
     std::vector<AdminUserView> adminUsers() const;

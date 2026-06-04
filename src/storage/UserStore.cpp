@@ -2,6 +2,8 @@
 
 #include "pixelwar/security/PasswordHasher.hpp"
 #include "pixelwar/utils/Base64.hpp"
+#include "pixelwar/utils/Random.hpp"
+#include "pixelwar/utils/Sha256.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -65,6 +67,16 @@ std::optional<std::uint32_t> parseUint32(const std::string& text) {
     return static_cast<std::uint32_t>(*value);
 }
 
+bool parseBoolFlag(const std::string& text, bool fallback) {
+    if (text == "1" || text == "true") {
+        return true;
+    }
+    if (text == "0" || text == "false") {
+        return false;
+    }
+    return fallback;
+}
+
 std::string decodeBase64Text(const std::string& encoded) {
     const auto bytes = utils::base64Decode(encoded);
     if (!bytes) {
@@ -75,6 +87,16 @@ std::string decodeBase64Text(const std::string& encoded) {
 
 std::string encodeText(const std::string& text) {
     return utils::base64Encode(std::vector<std::uint8_t>(text.begin(), text.end()));
+}
+
+std::string hashToken(const std::string& token) {
+    const std::vector<std::uint8_t> bytes(token.begin(), token.end());
+    const auto digest = utils::sha256(bytes);
+    return utils::base64Encode(std::vector<std::uint8_t>(digest.begin(), digest.end()));
+}
+
+std::string newVerificationToken() {
+    return utils::base64UrlEncode(utils::randomBytes(32));
 }
 
 std::string normalizeEmail(std::string email) {
@@ -129,7 +151,7 @@ bool UserStore::load() {
         }
 
         const auto parts = splitTabs(line);
-        if (parts.size() != 9) {
+        if (parts.size() != 9 && parts.size() != 12) {
             continue;
         }
 
@@ -158,6 +180,14 @@ bool UserStore::load() {
         user.email = normalizeEmail(decodeBase64Text(parts[8]));
         if (user.passwordHash.empty() || user.email.empty()) {
             continue;
+        }
+        if (parts.size() == 12) {
+            user.emailVerified = parseBoolFlag(parts[9], false);
+            user.emailVerificationTokenHash = parts[10];
+            const auto expiresAt = parseInt64(parts[11]);
+            user.emailVerificationExpiresAt = expiresAt.value_or(0);
+        } else {
+            user.emailVerified = true;
         }
 
         userIdsByName_[user.username] = user.id;
@@ -191,39 +221,45 @@ void UserStore::save() const {
              << user.pixelsPlacedInWindow << '\t'
              << '\t'
              << '\t'
-             << encodeText(user.email) << '\n';
+             << encodeText(user.email) << '\t'
+             << (user.emailVerified ? 1 : 0) << '\t'
+             << user.emailVerificationTokenHash << '\t'
+             << user.emailVerificationExpiresAt << '\n';
     }
 }
 
-bool UserStore::registerUser(
+RegistrationResult UserStore::registerUser(
     const std::string& username,
     const std::string& email,
     const std::string& password,
-    std::string& error
+    bool requireEmailVerification,
+    std::int64_t verificationTtlSeconds
 ) {
+    RegistrationResult result;
     if (!models::isValidUsername(username)) {
-        error = "invalid_username";
-        return false;
+        result.error = "invalid_username";
+        return result;
     }
     const std::string normalizedEmail = normalizeEmail(email);
     if (!isValidEmail(normalizedEmail)) {
-        error = "invalid_email";
-        return false;
+        result.error = "invalid_email";
+        return result;
     }
     if (!models::isValidPassword(password)) {
-        error = "invalid_password";
-        return false;
+        result.error = "invalid_password";
+        return result;
     }
 
+    const std::string token = requireEmailVerification ? newVerificationToken() : "";
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (userIdsByName_.find(username) != userIdsByName_.end()) {
-            error = "username_taken";
-            return false;
+            result.error = "username_taken";
+            return result;
         }
         if (userIdsByEmail_.find(normalizedEmail) != userIdsByEmail_.end()) {
-            error = "email_taken";
-            return false;
+            result.error = "email_taken";
+            return result;
         }
 
         models::User user;
@@ -231,18 +267,27 @@ bool UserStore::registerUser(
         user.username = username;
         user.email = normalizedEmail;
         user.passwordHash = security::PasswordHasher::hashPassword(password);
+        user.emailVerified = !requireEmailVerification;
+        user.emailVerificationTokenHash = requireEmailVerification ? hashToken(token) : "";
+        user.emailVerificationExpiresAt = requireEmailVerification
+            ? nowSeconds() + std::max<std::int64_t>(60, verificationTtlSeconds)
+            : 0;
         user.lastPixelTimestamp = 0;
         user.pixelWindowStartTimestamp = 0;
         user.pixelsPlacedInWindow = 0;
 
         userIdsByName_[user.username] = user.id;
         userIdsByEmail_[user.email] = user.id;
+        result.userId = user.id;
+        result.username = user.username;
+        result.email = user.email;
         usersById_[user.id] = std::move(user);
     }
 
     save();
-    error.clear();
-    return true;
+    result.created = true;
+    result.verificationToken = token;
+    return result;
 }
 
 std::optional<std::uint64_t> UserStore::verifyCredentials(const std::string& login, const std::string& password) {
@@ -273,6 +318,39 @@ std::optional<std::uint64_t> UserStore::verifyCredentials(const std::string& log
     return user.id;
 }
 
+bool UserStore::verifyEmailToken(const std::string& token, std::uint64_t& userId) {
+    if (token.empty()) {
+        return false;
+    }
+
+    const std::string tokenHash = hashToken(token);
+    bool verified = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const std::int64_t now = nowSeconds();
+        for (auto& [id, user] : usersById_) {
+            if (user.emailVerificationTokenHash != tokenHash) {
+                continue;
+            }
+            if (user.emailVerificationExpiresAt > 0 && user.emailVerificationExpiresAt < now) {
+                return false;
+            }
+
+            user.emailVerified = true;
+            user.emailVerificationTokenHash.clear();
+            user.emailVerificationExpiresAt = 0;
+            userId = id;
+            verified = true;
+            break;
+        }
+    }
+
+    if (verified) {
+        save();
+    }
+    return verified;
+}
+
 std::optional<models::User> UserStore::findById(std::uint64_t id) const {
     std::lock_guard<std::mutex> lock(mutex_);
     const auto it = usersById_.find(id);
@@ -296,6 +374,8 @@ std::vector<AdminUserView> UserStore::adminUsers() const {
         users.push_back(AdminUserView{
             id,
             user.username,
+            user.email,
+            user.emailVerified,
             user.lastPixelTimestamp,
             user.pixelWindowStartTimestamp,
             user.pixelsPlacedInWindow

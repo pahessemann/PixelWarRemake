@@ -20,6 +20,11 @@ struct ServerConfig {
     std::size_t maxBodyBytes = 8192;
     std::string adminUsername = "pahessemann";
     std::string publicBaseUrl = "http://127.0.0.1:8080";
+    bool requireEmailVerification = true;
+    bool exposeLocalVerificationLink = true;
+    std::int64_t emailVerificationTtlSeconds = 86400;
+    std::uint32_t loginFailureLimit = 5;
+    std::int64_t loginLockSeconds = 900;
     std::filesystem::path dataDir = "data";
 };
 

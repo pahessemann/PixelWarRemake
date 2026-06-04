@@ -17,7 +17,8 @@ const adminEls = {
   createBackupButton: document.getElementById("createBackupButton"),
   resetMapButton: document.getElementById("resetMapButton"),
   backupsTableBody: document.getElementById("backupsTableBody"),
-  usersTableBody: document.getElementById("usersTableBody")
+  usersTableBody: document.getElementById("usersTableBody"),
+  auditTableBody: document.getElementById("auditTableBody")
 };
 
 function setAdminStatus(text) {
@@ -149,7 +150,7 @@ function renderUsers(users) {
   if (!users.length) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 6;
+    cell.colSpan = 8;
     cell.textContent = "Aucun utilisateur";
     row.appendChild(cell);
     adminEls.usersTableBody.appendChild(row);
@@ -161,6 +162,8 @@ function renderUsers(users) {
     row.innerHTML = `
       <td>${user.id}</td>
       <td></td>
+      <td></td>
+      <td>${user.email_verified ? "Oui" : "Non"}</td>
       <td>${formatTimestamp(user.last_pixel_timestamp)}</td>
       <td>${formatTimestamp(user.pixel_window_start_timestamp)}</td>
       <td>${user.pixels_placed_in_window}</td>
@@ -168,15 +171,43 @@ function renderUsers(users) {
     `;
 
     row.children[1].textContent = user.username;
+    row.children[2].textContent = user.email || "-";
 
     const button = document.createElement("button");
     button.className = "ghost-button";
     button.type = "button";
     button.textContent = "Reset cooldown";
     button.addEventListener("click", () => resetCooldown(user.id));
-    row.children[5].appendChild(button);
+    row.children[7].appendChild(button);
 
     adminEls.usersTableBody.appendChild(row);
+  }
+}
+
+function renderAudit(entries) {
+  adminEls.auditTableBody.innerHTML = "";
+  if (!entries.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 4;
+    cell.textContent = "Aucune action";
+    row.appendChild(cell);
+    adminEls.auditTableBody.appendChild(row);
+    return;
+  }
+
+  for (const entry of entries.slice().reverse()) {
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td>${formatTimestamp(entry.timestamp)}</td>
+      <td></td>
+      <td></td>
+      <td></td>
+    `;
+    row.children[1].textContent = entry.actor;
+    row.children[2].textContent = entry.action;
+    row.children[3].textContent = entry.detail;
+    adminEls.auditTableBody.appendChild(row);
   }
 }
 
@@ -285,20 +316,23 @@ async function refreshAdmin() {
 
     hideNotice();
     setAdminStatus("Chargement");
-    const [summary, usersPayload, backupsPayload] = await Promise.all([
+    const [summary, usersPayload, backupsPayload, auditPayload] = await Promise.all([
       adminApi("/admin/summary"),
       adminApi("/admin/users"),
-      adminApi("/admin/backups")
+      adminApi("/admin/backups"),
+      adminApi("/admin/audit")
     ]);
     renderSummary(summary);
     renderUsers(usersPayload.users || []);
     renderBackups(backupsPayload.backups || []);
+    renderAudit(auditPayload.audit || []);
     setAdminStatus("Admin actif");
   } catch (error) {
     showNotice(explainAccessError(error), "error");
     setAdminStatus("Acces refuse");
-    adminEls.usersTableBody.innerHTML = `<tr><td colspan="6">-</td></tr>`;
+    adminEls.usersTableBody.innerHTML = `<tr><td colspan="8">-</td></tr>`;
     adminEls.backupsTableBody.innerHTML = `<tr><td colspan="6">-</td></tr>`;
+    adminEls.auditTableBody.innerHTML = `<tr><td colspan="4">-</td></tr>`;
   }
 }
 

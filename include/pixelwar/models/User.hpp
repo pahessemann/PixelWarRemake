@@ -10,6 +10,9 @@ struct User {
     std::string username;
     std::string passwordHash;
     std::string email;
+    bool emailVerified = false;
+    std::string emailVerificationTokenHash;
+    std::int64_t emailVerificationExpiresAt = 0;
     std::int64_t lastPixelTimestamp = 0;
     std::int64_t pixelWindowStartTimestamp = 0;
     std::uint32_t pixelsPlacedInWindow = 0;

@@ -7,7 +7,7 @@
   <title>PixelWarRemake</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="manifest" href="/site.webmanifest">
-  <link rel="stylesheet" href="/styles.css?v=local-auth-v1">
+  <link rel="stylesheet" href="/styles.css?v=features-v1">
 </head>
 <body>
   <div class="app-shell">
@@ -59,6 +59,7 @@
               </label>
               <button id="authSubmitButton" class="primary-button" type="submit">Login</button>
             </form>
+            <div id="verificationNotice" class="auth-note hidden"></div>
           </div>
         </section>
 
@@ -86,6 +87,21 @@
               <div id="cooldownBar"></div>
             </div>
           </div>
+        </section>
+
+        <section class="minimap-section">
+          <div class="section-head">
+            <h2>Vue</h2>
+            <span id="miniMapCenterLabel">-</span>
+          </div>
+          <canvas id="miniMapCanvas" class="mini-map" width="220" height="220" aria-label="Mini map"></canvas>
+        </section>
+
+        <section class="history-section">
+          <div class="section-head">
+            <h2>Derniers pixels</h2>
+          </div>
+          <div id="historyList" class="history-list"></div>
         </section>
       </aside>
 
@@ -119,6 +135,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=local-auth-v1" defer></script>
+  <script src="/app.js?v=features-v1" defer></script>
 </body>
 </html>

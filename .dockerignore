@@ -1,0 +1,7 @@
+.git
+.tools
+build
+data
+logs
+*.user
+*.tmp

@@ -11,5 +11,10 @@
   "max_body_bytes": 8192,
   "admin_username": "pahessemann",
   "public_base_url": "http://127.0.0.1:8080",
+  "require_email_verification": true,
+  "expose_local_verification_link": true,
+  "email_verification_ttl_seconds": 86400,
+  "login_failure_limit": 5,
+  "login_lock_seconds": 900,
   "data_dir": "data"
 }

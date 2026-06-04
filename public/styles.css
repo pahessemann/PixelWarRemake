@@ -195,6 +195,16 @@ a {
   font-size: 13px;
 }
 
+.auth-note {
+  display: grid;
+  gap: 8px;
+}
+
+.auth-verify-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
 .auth-link {
   min-height: 42px;
   display: inline-flex;
@@ -350,6 +360,57 @@ a {
   width: 0%;
   height: 100%;
   background: var(--accent-2);
+}
+
+.mini-map {
+  width: 100%;
+  aspect-ratio: 1;
+  display: block;
+  border: 1px solid var(--line);
+  background: #000;
+  image-rendering: pixelated;
+  cursor: crosshair;
+}
+
+#miniMapCenterLabel {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.history-list {
+  max-height: 210px;
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+}
+
+.history-row {
+  min-height: 32px;
+  display: grid;
+  grid-template-columns: 18px 1fr 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  background: #11161e;
+  color: var(--muted);
+  text-align: left;
+}
+
+.history-row strong {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.history-swatch {
+  width: 18px;
+  height: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.32);
+}
+
+.history-empty {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .ready-dot {

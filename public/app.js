@@ -22,6 +22,7 @@ const state = {
     x: 0,
     y: 0
   },
+  eventSource: null,
   pan: {
     active: false,
     dragged: false,
@@ -51,6 +52,7 @@ const els = {
   emailInput: document.getElementById("emailInput"),
   passwordInput: document.getElementById("passwordInput"),
   authSubmitButton: document.getElementById("authSubmitButton"),
+  verificationNotice: document.getElementById("verificationNotice"),
   paletteGrid: document.getElementById("paletteGrid"),
   selectedColorLabel: document.getElementById("selectedColorLabel"),
   targetCellLabel: document.getElementById("targetCellLabel"),
@@ -71,14 +73,42 @@ const els = {
   canvasFrame: document.getElementById("canvasFrame"),
   loadingOverlay: document.getElementById("loadingOverlay"),
   statusText: document.getElementById("statusText"),
-  lastRefresh: document.getElementById("lastRefresh")
+  lastRefresh: document.getElementById("lastRefresh"),
+  miniMapCanvas: document.getElementById("miniMapCanvas"),
+  miniMapCenterLabel: document.getElementById("miniMapCenterLabel"),
+  historyList: document.getElementById("historyList")
 };
 
 const ctx = els.canvas.getContext("2d", { alpha: false });
 const highlightCtx = els.highlightCanvas.getContext("2d");
+const miniCtx = els.miniMapCanvas.getContext("2d", { alpha: false });
 
 function setStatus(text) {
   els.statusText.textContent = text;
+}
+
+function hideVerificationNotice() {
+  els.verificationNotice.classList.add("hidden");
+  els.verificationNotice.replaceChildren();
+}
+
+function showVerificationNotice(payload) {
+  els.verificationNotice.replaceChildren();
+  const text = document.createElement("span");
+  text.textContent = "Email a verifier avant connexion.";
+  els.verificationNotice.appendChild(text);
+
+  if (payload.verification_link) {
+    const link = document.createElement("a");
+    link.href = payload.verification_link;
+    link.textContent = "Ouvrir le lien de verification";
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.className = "auth-verify-link";
+    els.verificationNotice.appendChild(link);
+  }
+
+  els.verificationNotice.classList.remove("hidden");
 }
 
 function updateAuthUi() {
@@ -182,6 +212,7 @@ function renderFullMap() {
   }
   ctx.putImageData(state.imageData, 0, 0);
   renderHighlights();
+  renderMiniMap();
 }
 
 function applyDiff(changes) {
@@ -199,6 +230,7 @@ function applyDiff(changes) {
   }
   ctx.putImageData(state.imageData, 0, 0);
   renderHighlights();
+  renderMiniMap();
 }
 
 function resizeCanvas(width, height) {
@@ -260,10 +292,7 @@ function selectColor(color, shouldAnnounce = false) {
   updatePlaceButton();
 }
 
-async function loadMap(forceFull = false) {
-  const since = forceFull ? "" : `?since=${state.sequence}`;
-  const payload = await api(`/map${since}`);
-
+function applyMapPayload(payload) {
   if (payload.type === "full") {
     resizeCanvas(payload.width, payload.height);
     state.pixels = decodeRle(payload.data, payload.width * payload.height);
@@ -279,6 +308,12 @@ async function loadMap(forceFull = false) {
   els.lastRefresh.textContent = new Date().toLocaleTimeString();
 }
 
+async function loadMap(forceFull = false) {
+  const since = forceFull ? "" : `?since=${state.sequence}`;
+  const payload = await api(`/map${since}`);
+  applyMapPayload(payload);
+}
+
 async function refreshMap() {
   try {
     setStatus("Refresh map");
@@ -287,6 +322,71 @@ async function refreshMap() {
   } catch (error) {
     setStatus(`Map: ${error.message}`);
   }
+}
+
+function renderHistory(entries) {
+  els.historyList.replaceChildren();
+  if (!entries.length) {
+    const empty = document.createElement("span");
+    empty.className = "history-empty";
+    empty.textContent = "Aucun pixel";
+    els.historyList.appendChild(empty);
+    return;
+  }
+
+  for (const entry of entries.slice().reverse()) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "history-row";
+    row.addEventListener("click", () => centerCellInView({ x: entry.x, y: entry.y }));
+
+    const swatch = document.createElement("span");
+    swatch.className = "history-swatch";
+    swatch.style.background = colorFor(entry.color).hex;
+
+    const label = document.createElement("span");
+    label.textContent = `${entry.x},${entry.y}`;
+
+    const user = document.createElement("strong");
+    user.textContent = entry.username || "-";
+
+    row.append(swatch, label, user);
+    els.historyList.appendChild(row);
+  }
+}
+
+async function loadHistory() {
+  try {
+    const payload = await api("/history?limit=24");
+    renderHistory(payload.pixels || []);
+  } catch (error) {
+    setStatus(`Historique: ${error.message}`);
+  }
+}
+
+function connectEvents() {
+  if (!("EventSource" in window)) {
+    return;
+  }
+  if (state.eventSource) {
+    state.eventSource.close();
+  }
+
+  state.eventSource = new EventSource(`/events?since=${state.sequence}`);
+  state.eventSource.addEventListener("pixels", (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      applyMapPayload(payload);
+      if (payload.type === "diff" && payload.changes && payload.changes.length) {
+        loadHistory();
+      }
+    } catch {
+      setStatus("Temps reel: payload invalide");
+    }
+  });
+  state.eventSource.onerror = () => {
+    setStatus("Temps reel: reconnexion");
+  };
 }
 
 function formatSeconds(seconds) {
@@ -345,6 +445,7 @@ function setAuthMode(mode) {
   els.loginInput.autocomplete = isRegister ? "username" : "username";
   els.passwordInput.autocomplete = isRegister ? "new-password" : "current-password";
   els.authSubmitButton.textContent = isRegister ? "Register" : "Login";
+  hideVerificationNotice();
 }
 
 async function submitAuthForm(event) {
@@ -369,15 +470,30 @@ async function submitAuthForm(event) {
           body: JSON.stringify({ login, password })
         });
 
+    els.passwordInput.value = "";
+    if (payload.verification_required) {
+      state.token = "";
+      state.username = "";
+      localStorage.removeItem("pixelwar.token");
+      localStorage.removeItem("pixelwar.username");
+      updateAuthUi();
+      showVerificationNotice(payload);
+      setStatus("Verification email requise");
+      return;
+    }
+
     state.token = payload.token || "";
     state.username = payload.username || login;
     localStorage.setItem("pixelwar.token", state.token);
     localStorage.setItem("pixelwar.username", state.username);
-    els.passwordInput.value = "";
     updateAuthUi();
     await refreshCooldown();
     setStatus(state.authMode === "register" ? "Compte cree" : "Connecte");
   } catch (error) {
+    if (error.message === "email_not_verified") {
+      setStatus("Email non verifie");
+      return;
+    }
     setStatus(`Compte: ${error.message}`);
   } finally {
     els.authSubmitButton.disabled = false;
@@ -567,6 +683,7 @@ async function placeSelectedPixel(color) {
     state.targetCell = null;
     updateCooldownUi();
     renderHighlights();
+    await loadHistory();
     setStatus(`Pixel ${point.x},${point.y}`);
   } catch (error) {
     if (error.payload && typeof error.payload.remaining_seconds === "number") {
@@ -624,6 +741,7 @@ function applyViewport() {
   els.highlightCanvas.style.height = `${state.height}px`;
   els.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
   renderHighlights();
+  renderMiniMap();
 }
 
 function setCamera(x, y) {
@@ -704,6 +822,50 @@ function visibleCenterCell() {
   };
 }
 
+function renderMiniMap() {
+  if (!state.palette.length || !state.pixels.length || state.width <= 1 || state.height <= 1) {
+    return;
+  }
+
+  const size = els.miniMapCanvas.width;
+  const image = miniCtx.createImageData(size, size);
+  for (let py = 0; py < size; py += 1) {
+    const sourceY = clamp(Math.floor((py / size) * state.height), 0, state.height - 1);
+    for (let px = 0; px < size; px += 1) {
+      const sourceX = clamp(Math.floor((px / size) * state.width), 0, state.width - 1);
+      const color = colorFor(state.pixels[sourceY * state.width + sourceX]).rgb;
+      const offset = (py * size + px) * 4;
+      image.data[offset] = color.r;
+      image.data[offset + 1] = color.g;
+      image.data[offset + 2] = color.b;
+      image.data[offset + 3] = 255;
+    }
+  }
+  miniCtx.putImageData(image, 0, 0);
+
+  const viewport = viewportSize();
+  const left = clamp((0 - state.camera.x) / state.zoom, 0, state.width);
+  const top = clamp((0 - state.camera.y) / state.zoom, 0, state.height);
+  const right = clamp((viewport.width - state.camera.x) / state.zoom, 0, state.width);
+  const bottom = clamp((viewport.height - state.camera.y) / state.zoom, 0, state.height);
+  const sx = size / state.width;
+  const sy = size / state.height;
+  miniCtx.strokeStyle = "#f4c95d";
+  miniCtx.lineWidth = 2;
+  miniCtx.strokeRect(left * sx, top * sy, Math.max(4, (right - left) * sx), Math.max(4, (bottom - top) * sy));
+
+  const center = visibleCenterCell();
+  els.miniMapCenterLabel.textContent = `${center.x},${center.y}`;
+}
+
+function centerFromMiniMap(event) {
+  const rect = els.miniMapCanvas.getBoundingClientRect();
+  const x = clamp(Math.floor(((event.clientX - rect.left) / rect.width) * state.width), 0, state.width - 1);
+  const y = clamp(Math.floor(((event.clientY - rect.top) / rect.height) * state.height), 0, state.height - 1);
+  centerCellInView({ x, y });
+  setStatus(`Vue ${x},${y}`);
+}
+
 function refreshViewportAroundCurrentCell() {
   const cell = state.targetCell || visibleCenterCell();
   applyZoom();
@@ -763,11 +925,14 @@ async function init() {
   els.canvasFrame.addEventListener("wheel", zoomWithWheel, { passive: false });
   els.zoomOutButton.addEventListener("click", () => changeZoom(-0.25));
   els.zoomInButton.addEventListener("click", () => changeZoom(0.25));
+  els.miniMapCanvas.addEventListener("click", centerFromMiniMap);
   window.addEventListener("resize", refreshViewportAroundCurrentCell);
 
   try {
     await loadPalette();
     await loadMap(true);
+    await loadHistory();
+    connectEvents();
     await refreshCooldown();
     if (!authError) {
       setStatus("Pret");
@@ -777,6 +942,7 @@ async function init() {
   }
 
   window.setInterval(refreshMap, 60000);
+  window.setInterval(loadHistory, 60000);
   window.setInterval(updateCooldownUi, 1000);
   window.setInterval(refreshCooldown, 30000);
 }

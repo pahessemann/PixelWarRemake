@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#111827">
   <title>Gestion - PixelWarRemake</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/styles.css?v=admin-v1">
+  <link rel="stylesheet" href="/styles.css?v=admin-v2">
 </head>
 <body>
   <div class="app-shell admin-shell">
@@ -108,6 +108,8 @@
               <tr>
                 <th>ID</th>
                 <th>Username</th>
+                <th>Email</th>
+                <th>Verifie</th>
                 <th>Dernier pixel</th>
                 <th>Fenetre cooldown</th>
                 <th>Placements</th>
@@ -116,7 +118,34 @@
             </thead>
             <tbody id="usersTableBody">
               <tr>
-                <td colspan="6">Chargement</td>
+                <td colspan="8">Chargement</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="admin-band">
+        <div class="admin-head">
+          <div>
+            <h2>Audit</h2>
+            <p>Historique des actions sensibles effectuees dans ce panel.</p>
+          </div>
+        </div>
+
+        <div class="admin-table-wrap">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Acteur</th>
+                <th>Action</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+            <tbody id="auditTableBody">
+              <tr>
+                <td colspan="4">Chargement</td>
               </tr>
             </tbody>
           </table>
@@ -125,6 +154,6 @@
     </main>
   </div>
 
-  <script src="/admin.js?v=admin-v1" defer></script>
+  <script src="/admin.js?v=admin-v2" defer></script>
 </body>
 </html>

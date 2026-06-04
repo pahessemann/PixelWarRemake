@@ -1,15 +1,21 @@
 #include "pixelwar/controllers/ApiController.hpp"
 
 #include "pixelwar/utils/Json.hpp"
+#include "pixelwar/storage/AuditLog.hpp"
 #include "pixelwar/storage/MapBackup.hpp"
+#include "pixelwar/storage/PixelHistory.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <fstream>
 #include <optional>
 #include <filesystem>
+#include <memory>
+#include <mutex>
 #include <sstream>
 #include <system_error>
+#include <unordered_map>
 #include <vector>
 
 namespace pixelwar::controllers {
@@ -23,6 +29,12 @@ HttpResponse jsonError(int status, const std::string& code) {
     return HttpResponse::json(status, R"({"error":")" + pixelwar::utils::json::escape(code) + R"("})");
 }
 
+std::int64_t nowSeconds() {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()
+    ).count();
+}
+
 std::optional<std::uint64_t> parseUint64(const std::string& text) {
     std::uint64_t value = 0;
     const auto* begin = text.data();
@@ -33,6 +45,96 @@ std::optional<std::uint64_t> parseUint64(const std::string& text) {
     }
     return value;
 }
+
+std::string trimTrailingSlash(std::string value) {
+    while (!value.empty() && value.back() == '/') {
+        value.pop_back();
+    }
+    return value;
+}
+
+std::string urlEncode(const std::string& value) {
+    std::ostringstream out;
+    constexpr char hex[] = "0123456789ABCDEF";
+    for (const unsigned char c : value) {
+        if ((c >= 'A' && c <= 'Z') ||
+            (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '~') {
+            out << static_cast<char>(c);
+        } else {
+            out << '%' << hex[(c >> 4) & 0xF] << hex[c & 0xF];
+        }
+    }
+    return out.str();
+}
+
+std::string verificationLink(const config::ServerConfig& cfg, const std::string& token) {
+    return trimTrailingSlash(cfg.publicBaseUrl) + "/verify-email?token=" + urlEncode(token);
+}
+
+void appendVerificationOutbox(
+    const config::ServerConfig& cfg,
+    const storage::RegistrationResult& registration,
+    const std::string& link
+) {
+    const auto path = cfg.dataDir / "email_outbox.txt";
+    if (!path.parent_path().empty()) {
+        std::filesystem::create_directories(path.parent_path());
+    }
+
+    std::ofstream file(path, std::ios::app);
+    if (!file) {
+        return;
+    }
+
+    file << "to: " << registration.email << '\n'
+         << "subject: PixelWarRemake - verification email\n"
+         << "user: " << registration.username << '\n'
+         << "link: " << link << "\n\n";
+}
+
+HttpResponse htmlResponse(int status, const std::string& body) {
+    auto response = HttpResponse::text(status, body);
+    response.headers["Content-Type"] = "text/html; charset=utf-8";
+    return response;
+}
+
+class LoginLockoutStore {
+public:
+    bool isLocked(const std::string& key, std::int64_t now) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto it = attempts_.find(key);
+        return it != attempts_.end() && it->second.lockedUntil > now;
+    }
+
+    void recordFailure(const std::string& key, std::uint32_t limit, std::int64_t lockSeconds, std::int64_t now) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto& attempt = attempts_[key];
+        if (attempt.lockedUntil > now) {
+            return;
+        }
+        ++attempt.failures;
+        if (attempt.failures >= limit) {
+            attempt.failures = 0;
+            attempt.lockedUntil = now + lockSeconds;
+        }
+    }
+
+    void clear(const std::string& key) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        attempts_.erase(key);
+    }
+
+private:
+    struct Attempt {
+        std::uint32_t failures = 0;
+        std::int64_t lockedUntil = 0;
+    };
+
+    std::mutex mutex_;
+    std::unordered_map<std::string, Attempt> attempts_;
+};
 
 std::optional<std::string> tokenFromRequest(const HttpRequest& request, const std::optional<pixelwar::utils::json::Object>& body = std::nullopt) {
     if (const auto authorization = request.header("authorization")) {
@@ -112,8 +214,8 @@ std::optional<HttpResponse> sessionGuard(
     }
 
     const auto user = userStore.findById(*sessionUserId);
-    if (!user || user->passwordHash.empty() || user->email.empty()) {
-        return jsonError(403, "local_account_required");
+    if (!user || user->passwordHash.empty() || user->email.empty() || !user->emailVerified) {
+        return jsonError(403, "verified_email_required");
     }
 
     userId = *sessionUserId;
@@ -124,7 +226,8 @@ std::optional<HttpResponse> adminGuard(
     const HttpRequest& request,
     const storage::UserStore& userStore,
     pixelwar::security::SessionManager& sessions,
-    const config::ServerConfig& cfg
+    const config::ServerConfig& cfg,
+    models::User* adminUser = nullptr
 ) {
     std::uint64_t userId = 0;
     if (auto error = sessionGuard(request, userStore, sessions, userId)) {
@@ -137,6 +240,9 @@ std::optional<HttpResponse> adminGuard(
     }
     if (user->username != cfg.adminUsername) {
         return jsonError(403, "forbidden");
+    }
+    if (adminUser) {
+        *adminUser = *user;
     }
 
     return std::nullopt;
@@ -152,6 +258,8 @@ std::string adminUsersJson(const std::vector<storage::AdminUserView>& users) {
         const auto& user = users[i];
         out << R"({"id":)" << user.id
             << R"(,"username":")" << utils::json::escape(user.username) << '"'
+            << R"(,"email":")" << utils::json::escape(user.email) << '"'
+            << R"(,"email_verified":)" << (user.emailVerified ? "true" : "false")
             << R"(,"last_pixel_timestamp":)" << user.lastPixelTimestamp
             << R"(,"pixel_window_start_timestamp":)" << user.pixelWindowStartTimestamp
             << R"(,"pixels_placed_in_window":)" << user.pixelsPlacedInWindow
@@ -184,6 +292,54 @@ std::string backupsJson(const std::vector<storage::MapBackupEntry>& backups) {
     }
     out << "]}";
     return out.str();
+}
+
+std::string pixelHistoryJson(const std::vector<storage::PixelHistoryEntry>& entries) {
+    std::ostringstream out;
+    out << R"({"pixels":[)";
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        if (i != 0) {
+            out << ',';
+        }
+        const auto& entry = entries[i];
+        out << R"({"seq":)" << entry.sequence
+            << R"(,"x":)" << entry.x
+            << R"(,"y":)" << entry.y
+            << R"(,"color":)" << static_cast<int>(entry.color)
+            << R"(,"username":")" << utils::json::escape(entry.username) << '"'
+            << R"(,"timestamp":)" << entry.timestamp
+            << '}';
+    }
+    out << "]}";
+    return out.str();
+}
+
+std::string auditJson(const std::vector<storage::AuditEntry>& entries) {
+    std::ostringstream out;
+    out << R"({"audit":[)";
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        if (i != 0) {
+            out << ',';
+        }
+        const auto& entry = entries[i];
+        out << R"({"timestamp":)" << entry.timestamp
+            << R"(,"actor":")" << utils::json::escape(entry.actor) << '"'
+            << R"(,"action":")" << utils::json::escape(entry.action) << '"'
+            << R"(,"detail":")" << utils::json::escape(entry.detail) << '"'
+            << '}';
+    }
+    out << "]}";
+    return out.str();
+}
+
+HttpResponse sseResponse(std::uint64_t id, const std::string& eventName, const std::string& data) {
+    auto response = HttpResponse::text(
+        200,
+        "retry: 3000\nid: " + std::to_string(id) + "\nevent: " + eventName + "\ndata: " + data + "\n\n"
+    );
+    response.headers["Content-Type"] = "text/event-stream; charset=utf-8";
+    response.headers["Cache-Control"] = "no-cache";
+    return response;
 }
 
 HttpResponse binaryFileResponse(const std::filesystem::path& path, const std::string& contentType) {
@@ -220,6 +376,11 @@ void registerApiRoutes(
     const config::ServerConfig& cfg
 ) {
     const auto mapPath = cfg.dataDir / "map.pwm";
+    const auto pixelHistory = std::make_shared<storage::PixelHistory>(cfg.dataDir / "pixel_history.log");
+    pixelHistory->load();
+    const auto auditLog = std::make_shared<storage::AuditLog>(cfg.dataDir / "audit.log");
+    auditLog->load();
+    const auto loginLockouts = std::make_shared<LoginLockoutStore>();
 
     router.add("GET", "/health", [&pixelMap](const HttpRequest&) {
         std::ostringstream out;
@@ -231,9 +392,27 @@ void registerApiRoutes(
         return HttpResponse::json(200, paletteJson(cfg.paletteSize));
     });
 
-    router.add("POST", "/register", [&userStore, &sessions, &rateLimiter](const HttpRequest& request) {
+    router.add("GET", "/verify-email", [&userStore](const HttpRequest& request) {
+        const auto token = request.queryValue("token");
+        std::uint64_t userId = 0;
+        if (!token || !userStore.verifyEmailToken(*token, userId)) {
+            return htmlResponse(
+                400,
+                "<!doctype html><html lang=\"fr\"><meta charset=\"utf-8\"><title>Email</title>"
+                "<body>Email impossible a verifier. Le lien est invalide ou expire.</body></html>"
+            );
+        }
+
+        return htmlResponse(
+            200,
+            "<!doctype html><html lang=\"fr\"><meta charset=\"utf-8\"><title>Email</title>"
+            "<body>Email verifie. Tu peux maintenant revenir sur <a href=\"/\">PixelWarRemake</a> et te connecter.</body></html>"
+        );
+    });
+
+    router.add("POST", "/register", [&userStore, &sessions, &rateLimiter, &cfg](const HttpRequest& request) {
         const std::string clientKey = request.remoteAddress.empty() ? "local" : request.remoteAddress;
-        if (!rateLimiter.allow("register:" + clientKey, 20, std::chrono::minutes(1))) {
+        if (!rateLimiter.allow("register:" + clientKey, 5, std::chrono::minutes(10))) {
             return jsonError(429, "rate_limited");
         }
 
@@ -249,25 +428,42 @@ void registerApiRoutes(
             return jsonError(400, "missing_credentials");
         }
 
-        std::string error;
-        if (!userStore.registerUser(*username, *email, *password, error)) {
-            const int status = error == "username_taken" || error == "email_taken" ? 409 : 400;
-            return jsonError(status, error);
+        const auto registration = userStore.registerUser(
+            *username,
+            *email,
+            *password,
+            cfg.requireEmailVerification,
+            cfg.emailVerificationTtlSeconds
+        );
+        if (!registration.created) {
+            const int status = registration.error == "username_taken" || registration.error == "email_taken" ? 409 : 400;
+            return jsonError(status, registration.error);
         }
 
-        const auto userId = userStore.verifyCredentials(*username, *password);
-        if (!userId) {
-            return jsonError(500, "session_creation_failed");
+        if (cfg.requireEmailVerification) {
+            const std::string link = verificationLink(cfg, registration.verificationToken);
+            appendVerificationOutbox(cfg, registration, link);
+            std::ostringstream out;
+            out << R"({"status":"verification_required","username":")" << utils::json::escape(registration.username)
+                << R"(","email":")" << utils::json::escape(registration.email)
+                << R"(","verification_required":true)";
+            if (cfg.exposeLocalVerificationLink) {
+                out << R"(,"verification_link":")" << utils::json::escape(link) << '"';
+            }
+            out << '}';
+            return HttpResponse::json(200, out.str());
         }
-        const std::string token = sessions.createSession(*userId);
+
+        const std::string token = sessions.createSession(registration.userId);
         return HttpResponse::json(
             200,
             R"({"status":"registered","token":")" + utils::json::escape(token) +
-                R"(","username":")" + utils::json::escape(*username) + R"("})"
+                R"(","username":")" + utils::json::escape(registration.username) +
+                R"(","verification_required":false})"
         );
     });
 
-    router.add("POST", "/login", [&userStore, &sessions, &rateLimiter](const HttpRequest& request) {
+    router.add("POST", "/login", [&userStore, &sessions, &rateLimiter, &cfg, loginLockouts](const HttpRequest& request) {
         const std::string clientKey = request.remoteAddress.empty() ? "local" : request.remoteAddress;
         if (!rateLimiter.allow("login:" + clientKey, 30, std::chrono::minutes(1))) {
             return jsonError(429, "rate_limited");
@@ -285,15 +481,27 @@ void registerApiRoutes(
             return jsonError(400, "missing_credentials");
         }
 
+        const std::string lockKey = clientKey + ":" + login;
+        const std::int64_t now = nowSeconds();
+        if (loginLockouts->isLocked(lockKey, now)) {
+            return jsonError(429, "login_temporarily_locked");
+        }
+
         const auto userId = userStore.verifyCredentials(login, *password);
         if (!userId) {
+            loginLockouts->recordFailure(lockKey, cfg.loginFailureLimit, cfg.loginLockSeconds, now);
             return jsonError(401, "invalid_credentials");
         }
 
         const auto user = userStore.findById(*userId);
         if (!user) {
+            loginLockouts->recordFailure(lockKey, cfg.loginFailureLimit, cfg.loginLockSeconds, now);
             return jsonError(401, "invalid_credentials");
         }
+        if (!user->emailVerified) {
+            return jsonError(403, "email_not_verified");
+        }
+        loginLockouts->clear(lockKey);
         const std::string token = sessions.createSession(*userId);
         return HttpResponse::json(
             200,
@@ -313,7 +521,31 @@ void registerApiRoutes(
         return HttpResponse::json(200, pixelMap.toJson(since));
     });
 
-    router.add("POST", "/pixel", [&pixelMap, &userStore, &sessions, &rateLimiter, &cfg, mapPath](const HttpRequest& request) {
+    router.add("GET", "/events", [&pixelMap](const HttpRequest& request) {
+        std::optional<std::uint64_t> since;
+        if (const auto lastEventId = request.header("last-event-id")) {
+            since = parseUint64(*lastEventId);
+        }
+        if (const auto querySince = request.queryValue("since")) {
+            since = parseUint64(*querySince);
+        }
+        if (!since) {
+            since = pixelMap.sequence();
+        }
+        return sseResponse(pixelMap.sequence(), "pixels", pixelMap.toJson(since));
+    });
+
+    router.add("GET", "/history", [pixelHistory](const HttpRequest& request) {
+        std::size_t limit = 30;
+        if (const auto value = request.queryValue("limit")) {
+            if (const auto parsed = parseUint64(*value)) {
+                limit = static_cast<std::size_t>(std::min<std::uint64_t>(*parsed, 100));
+            }
+        }
+        return HttpResponse::json(200, pixelHistoryJson(pixelHistory->latest(limit)));
+    });
+
+    router.add("POST", "/pixel", [&pixelMap, &userStore, &sessions, &rateLimiter, &cfg, mapPath, pixelHistory](const HttpRequest& request) {
         const auto body = parseJsonBody(request);
         if (!body) {
             return jsonError(400, "invalid_json");
@@ -359,6 +591,8 @@ void registerApiRoutes(
         }
 
         pixelMap.saveBinary(mapPath);
+        const auto user = userStore.findById(userId);
+        pixelHistory->append(change, user ? user->username : "unknown", nowSeconds());
 
         std::ostringstream out;
         out << R"({"status":"placed","sequence":)" << change.sequence
@@ -407,8 +641,9 @@ void registerApiRoutes(
         return HttpResponse::json(200, adminUsersJson(userStore.adminUsers()));
     });
 
-    router.add("POST", "/admin/users/reset-cooldown", [&userStore, &sessions, &cfg](const HttpRequest& request) {
-        if (auto error = adminGuard(request, userStore, sessions, cfg)) {
+    router.add("POST", "/admin/users/reset-cooldown", [&userStore, &sessions, &cfg, auditLog](const HttpRequest& request) {
+        models::User admin;
+        if (auto error = adminGuard(request, userStore, sessions, cfg, &admin)) {
             return *error;
         }
 
@@ -426,6 +661,7 @@ void registerApiRoutes(
             return jsonError(404, "user_not_found");
         }
 
+        auditLog->append(admin.username, "reset-cooldown", "user_id=" + std::to_string(*userId), nowSeconds());
         return HttpResponse::json(200, R"({"status":"reset"})");
     });
 
@@ -437,8 +673,9 @@ void registerApiRoutes(
         return HttpResponse::json(200, backupsJson(storage::listMapBackups(cfg.dataDir)));
     });
 
-    router.add("POST", "/admin/backups/create", [&pixelMap, &userStore, &sessions, &cfg](const HttpRequest& request) {
-        if (auto error = adminGuard(request, userStore, sessions, cfg)) {
+    router.add("POST", "/admin/backups/create", [&pixelMap, &userStore, &sessions, &cfg, auditLog](const HttpRequest& request) {
+        models::User admin;
+        if (auto error = adminGuard(request, userStore, sessions, cfg, &admin)) {
             return *error;
         }
 
@@ -448,14 +685,16 @@ void registerApiRoutes(
 
         try {
             const auto backup = storage::createMapBackup(pixelMap, cfg.dataDir, reason, includeScreenshot);
+            auditLog->append(admin.username, "backup-create", "id=" + backup.id + ";reason=" + reason, nowSeconds());
             return HttpResponse::json(200, R"({"backup":)" + backupEntryJson(backup) + "}");
         } catch (const std::exception&) {
             return jsonError(500, "backup_failed");
         }
     });
 
-    router.add("POST", "/admin/backups/rollback", [&pixelMap, &userStore, &sessions, &cfg, mapPath](const HttpRequest& request) {
-        if (auto error = adminGuard(request, userStore, sessions, cfg)) {
+    router.add("POST", "/admin/backups/rollback", [&pixelMap, &userStore, &sessions, &cfg, mapPath, auditLog](const HttpRequest& request) {
+        models::User admin;
+        if (auto error = adminGuard(request, userStore, sessions, cfg, &admin)) {
             return *error;
         }
 
@@ -474,6 +713,7 @@ void registerApiRoutes(
             if (!storage::restoreMapBackup(pixelMap, cfg.dataDir, *id, mapPath)) {
                 return jsonError(500, "rollback_failed");
             }
+            auditLog->append(admin.username, "backup-rollback", "restored_id=" + *id, nowSeconds());
             return HttpResponse::json(
                 200,
                 R"({"status":"rolled_back","restored_id":")" + utils::json::escape(*id) +
@@ -484,8 +724,9 @@ void registerApiRoutes(
         }
     });
 
-    router.add("POST", "/admin/map/reset", [&pixelMap, &userStore, &sessions, &cfg, mapPath](const HttpRequest& request) {
-        if (auto error = adminGuard(request, userStore, sessions, cfg)) {
+    router.add("POST", "/admin/map/reset", [&pixelMap, &userStore, &sessions, &cfg, mapPath, auditLog](const HttpRequest& request) {
+        models::User admin;
+        if (auto error = adminGuard(request, userStore, sessions, cfg, &admin)) {
             return *error;
         }
 
@@ -499,6 +740,7 @@ void registerApiRoutes(
             const auto finalBackup = storage::createMapBackup(pixelMap, cfg.dataDir, "before-reset", true);
             pixelMap.reset(static_cast<std::uint8_t>(color));
             pixelMap.saveBinary(mapPath);
+            auditLog->append(admin.username, "map-reset", "color=" + std::to_string(color), nowSeconds());
             return HttpResponse::json(
                 200,
                 R"({"status":"reset","final_backup":)" + backupEntryJson(finalBackup) + "}"
@@ -523,6 +765,20 @@ void registerApiRoutes(
             return jsonError(404, "screenshot_not_found");
         }
         return binaryFileResponse(*path, "image/bmp");
+    });
+
+    router.add("GET", "/admin/audit", [&userStore, &sessions, &cfg, auditLog](const HttpRequest& request) {
+        if (auto error = adminGuard(request, userStore, sessions, cfg)) {
+            return *error;
+        }
+
+        std::size_t limit = 100;
+        if (const auto value = request.queryValue("limit")) {
+            if (const auto parsed = parseUint64(*value)) {
+                limit = static_cast<std::size_t>(std::min<std::uint64_t>(*parsed, 300));
+            }
+        }
+        return HttpResponse::json(200, auditJson(auditLog->latest(limit)));
     });
 }
 

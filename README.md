@@ -7,18 +7,20 @@ Serveur web C++20 pour une carte de pixels persistante. Les utilisateurs creent 
 ## Fonctionnalites
 
 - Serveur HTTP self-contained en C++20 avec thread pool.
-- API REST JSON: `/register`, `/login`, `/map`, `/pixel`, `/cooldown`.
-- Comptes locaux avec pseudo unique, email unique et mot de passe hashe.
+- API REST JSON: `/register`, `/verify-email`, `/login`, `/map`, `/events`, `/history`, `/pixel`, `/cooldown`.
+- Comptes locaux avec pseudo unique, email unique, verification email et mot de passe hashe.
 - Login possible avec le pseudo ou l'email.
 - Sessions par token Bearer avec expiration.
 - Cooldown strict cote serveur: 3 pixels par fenetre de 10 minutes par defaut.
 - Pixel map en memoire protegee par `std::shared_mutex`.
 - Persistance binaire de la map avec encodage RLE.
 - Cache en memoire de la derniere map compressee.
-- Rate limiting simple pour login, register et placement de pixels.
-- Frontend web: canvas pixel map, palette, cooldown, zoom, deplacement et refresh automatique.
+- Rate limiting et verrouillage temporaire apres trop d'echecs de login.
+- Frontend web: canvas pixel map, palette, cooldown, zoom, deplacement, mini-map, historique et flux temps reel SSE.
 - Panel administrateur cache sur `/gestion`, protege par token Bearer et `admin_username`.
+- Journal d'audit administrateur pour reset, rollback, backup et reset cooldown.
 - Backups serveur horaires de la map, backups manuels, rollback et reset avec screenshot BMP final.
+- Dockerfile et `docker-compose.yml` pour deploiement.
 - Documentation OpenAPI dans `docs/openapi.yaml`.
 
 ## Build
@@ -64,6 +66,11 @@ Copier `config/server.example.json` vers `config/server.json`, puis ajuster:
   "max_body_bytes": 8192,
   "admin_username": "pahessemann",
   "public_base_url": "http://127.0.0.1:8080",
+  "require_email_verification": true,
+  "expose_local_verification_link": true,
+  "email_verification_ttl_seconds": 86400,
+  "login_failure_limit": 5,
+  "login_lock_seconds": 900,
   "data_dir": "data"
 }
 ```
@@ -78,9 +85,11 @@ Cette version n'utilise plus de fournisseur de connexion externe. Tout fonctionn
 2. Le serveur verifie le format du pseudo, le format basique de l'email et la force minimale du mot de passe.
 3. Le serveur refuse les pseudos et emails deja utilises.
 4. Le mot de passe est stocke sous forme de hash PBKDF2-HMAC-SHA256 avec sel aleatoire.
-5. `/login` renvoie un token de session Bearer.
+5. Si `require_email_verification` est actif, le serveur cree un token de verification et ecrit le lien dans `data/email_outbox.txt`.
+6. En local, `expose_local_verification_link` affiche aussi le lien dans l'interface pour pouvoir tester sans serveur mail.
+7. `/login` renvoie un token de session Bearer uniquement apres validation de l'email.
 
-Cette methode est volontairement simple pour le developpement local. Elle bloque les emails mal formes et les doublons dans la base locale, mais elle ne prouve pas que l'adresse email existe vraiment. Pour un deploiement public avec email verifie, il faudra ajouter un envoi de mail avec lien de confirmation ou utiliser un fournisseur d'identite externe.
+Cette methode est volontairement pratique pour le developpement local. Elle force un passage par lien de verification, mais l'envoi reel du mail reste a brancher a un fournisseur transactionnel pour la production. Le guide `docs/deployment.md` decrit ce passage.
 
 Les anciens comptes externes sans mot de passe local ne sont plus acceptes au chargement.
 
@@ -90,6 +99,9 @@ Les anciens comptes externes sans mot de passe local ne sont plus acceptes au ch
 curl -X POST http://localhost:8080/register \
   -H "Content-Type: application/json" \
   -d '{"username":"paul","email":"paul@example.test","password":"motdepasse-solide"}'
+
+# En local, ouvrir le lien ecrit dans data/email_outbox.txt,
+# ou le champ verification_link renvoye par /register.
 
 curl -X POST http://localhost:8080/login \
   -H "Content-Type: application/json" \
@@ -133,6 +145,8 @@ Soit un diff si `GET /map?since=41` peut etre satisfait depuis l'historique en m
 }
 ```
 
+Le navigateur utilise aussi `GET /events?since=<sequence>` en SSE. Le serveur renvoie un evenement `pixels` contenant le meme format JSON que `/map`; le navigateur reconnecte automatiquement si la connexion se ferme.
+
 ## Frontend
 
 Le dossier `public/` contient l'interface web servie par le serveur C++:
@@ -140,14 +154,22 @@ Le dossier `public/` contient l'interface web servie par le serveur C++:
 - `index.html`: structure de l'application.
 - `admin.html`: panel de gestion accessible via `/gestion`.
 - `styles.css`: interface responsive.
-- `app.js`: auth locale, rendu canvas, decode RLE, diffs, cooldown et pose de pixel.
-- `admin.js`: statistiques admin, liste utilisateurs, backups, rollback, reset carte et reset cooldown.
+- `app.js`: auth locale, verification email, rendu canvas, mini-map, historique, SSE, cooldown et pose de pixel.
+- `admin.js`: statistiques admin, liste utilisateurs, backups, audit, rollback, reset carte et reset cooldown.
 
-Le navigateur appelle `/map` au chargement puis toutes les 60 secondes. Les clics sur le canvas selectionnent une case; le bouton "Valider le pixel" envoie `POST /pixel` avec le token Bearer courant.
+Le navigateur appelle `/map` au chargement, ouvre `/events` pour recevoir les diffs en quasi temps reel, puis garde un refresh de securite toutes les 60 secondes. Les clics sur le canvas selectionnent une case; le bouton "Valider le pixel" envoie `POST /pixel` avec le token Bearer courant.
 
 Le panel `/gestion` n'est pas lie depuis l'interface publique. Il utilise le token de session stocke par l'interface et refuse tout compte dont le pseudo ne correspond pas a `admin_username`.
 
-Le serveur cree un backup de la map toutes les heures dans `data/backups`. Depuis `/gestion`, un administrateur peut creer un backup manuel, restaurer un backup, ou reset la carte. Avant chaque reset et rollback, un backup de securite est cree; le reset genere aussi un screenshot BMP de l'etat final avant remise a zero.
+Le serveur cree un backup de la map toutes les heures dans `data/backups`. Depuis `/gestion`, un administrateur peut creer un backup manuel, restaurer un backup, ou reset la carte. Avant chaque reset et rollback, un backup de securite est cree; le reset genere aussi un screenshot BMP de l'etat final avant remise a zero. Les actions sensibles sont ajoutees dans `data/audit.log`.
+
+## Docker
+
+```bash
+docker compose up --build -d
+```
+
+Voir `docs/deployment.md` pour les volumes, l'outbox email local et les recommandations production.
 
 ## Tests
 

@@ -125,8 +125,8 @@ TEST_CASE("user store allows three pixels per cooldown window") {
     std::filesystem::remove(path);
 
     pixelwar::storage::UserStore store(path);
-    std::string error;
-    REQUIRE(store.registerUser("quota_user", "quota@example.test", "motdepasse-solide", error));
+    const auto registration = store.registerUser("quota_user", "quota@example.test", "motdepasse-solide", false, 86400);
+    REQUIRE(registration.created);
     const auto userId = store.verifyCredentials("quota_user", "motdepasse-solide");
     REQUIRE(userId.has_value());
 
@@ -156,11 +156,13 @@ TEST_CASE("user store creates local accounts with unique emails") {
     std::filesystem::remove(path);
 
     pixelwar::storage::UserStore store(path);
-    std::string error;
-    REQUIRE(!store.registerUser("bad_email", "not-an-email", "motdepasse-solide", error));
-    REQUIRE(error == "invalid_email");
+    const auto badEmail = store.registerUser("bad_email", "not-an-email", "motdepasse-solide", true, 86400);
+    REQUIRE(!badEmail.created);
+    REQUIRE(badEmail.error == "invalid_email");
 
-    REQUIRE(store.registerUser("local_user", "USER@example.test", "motdepasse-solide", error));
+    const auto registration = store.registerUser("local_user", "USER@example.test", "motdepasse-solide", true, 86400);
+    REQUIRE(registration.created);
+    REQUIRE(!registration.verificationToken.empty());
     const auto userId = store.verifyCredentials("local_user", "motdepasse-solide");
     REQUIRE(userId.has_value());
     REQUIRE(store.verifyCredentials("user@example.test", "motdepasse-solide") == userId);
@@ -168,10 +170,17 @@ TEST_CASE("user store creates local accounts with unique emails") {
     const auto user = store.findById(*userId);
     REQUIRE(user.has_value());
     REQUIRE(user->email == "user@example.test");
+    REQUIRE(!user->emailVerified);
     REQUIRE(!user->passwordHash.empty());
 
-    REQUIRE(!store.registerUser("other_user", "user@example.test", "motdepasse-solide", error));
-    REQUIRE(error == "email_taken");
+    std::uint64_t verifiedUserId = 0;
+    REQUIRE(store.verifyEmailToken(registration.verificationToken, verifiedUserId));
+    REQUIRE(verifiedUserId == *userId);
+    REQUIRE(store.findById(*userId)->emailVerified);
+
+    const auto duplicate = store.registerUser("other_user", "user@example.test", "motdepasse-solide", true, 86400);
+    REQUIRE(!duplicate.created);
+    REQUIRE(duplicate.error == "email_taken");
 
     std::filesystem::remove(path);
 }
@@ -195,6 +204,7 @@ TEST_CASE("user store loads local accounts and ignores passwordless legacy rows"
     REQUIRE(localUser.has_value());
     REQUIRE(localUser->username == "local_user");
     REQUIRE(localUser->email == "local@example.test");
+    REQUIRE(localUser->emailVerified);
 
     REQUIRE(store.verifyCredentials("local@example.test", "motdepasse-solide").value() == 2);
     REQUIRE(!store.verifyCredentials("local_user", "wrong-password").has_value());
@@ -213,6 +223,8 @@ TEST_CASE("api registers and logs in local accounts") {
     pixelwar::security::RateLimiter limiter;
     pixelwar::config::ServerConfig cfg;
     cfg.dataDir = std::filesystem::current_path();
+    cfg.requireEmailVerification = true;
+    cfg.publicBaseUrl = "http://127.0.0.1:8080";
 
     pixelwar::controllers::registerApiRoutes(router, map, store, sessions, limiter, cfg);
 
@@ -223,9 +235,35 @@ TEST_CASE("api registers and logs in local accounts") {
     request.body = R"({"username":"paul","email":"paul@example.test","password":"motdepasse-solide"})";
     const auto registerResponse = router.dispatch(request);
     REQUIRE(registerResponse.status == 200);
-    REQUIRE(registerResponse.body.find(R"("token":")") != std::string::npos);
+    REQUIRE(registerResponse.body.find(R"("verification_required":true)") != std::string::npos);
 
     request.path = "/login";
+    request.body = R"({"login":"paul@example.test","password":"motdepasse-solide"})";
+    const auto unverifiedLoginResponse = router.dispatch(request);
+    REQUIRE(unverifiedLoginResponse.status == 403);
+
+    const auto userBeforeVerification = store.findById(store.verifyCredentials("paul", "motdepasse-solide").value());
+    REQUIRE(userBeforeVerification.has_value());
+    REQUIRE(!userBeforeVerification->emailVerified);
+
+    request.method = "GET";
+    request.path = "/verify-email";
+    request.query["token"] = store.findById(userBeforeVerification->id)->emailVerificationTokenHash;
+    request.query.clear();
+    const std::string marker = R"("verification_link":")";
+    const auto linkStart = registerResponse.body.find(marker);
+    REQUIRE(linkStart != std::string::npos);
+    const auto tokenStart = registerResponse.body.find("token=", linkStart);
+    REQUIRE(tokenStart != std::string::npos);
+    const auto tokenEnd = registerResponse.body.find('"', tokenStart);
+    REQUIRE(tokenEnd != std::string::npos);
+    request.query["token"] = registerResponse.body.substr(tokenStart + 6, tokenEnd - tokenStart - 6);
+    const auto verifyResponse = router.dispatch(request);
+    REQUIRE(verifyResponse.status == 200);
+
+    request.method = "POST";
+    request.path = "/login";
+    request.query.clear();
     request.body = R"({"login":"paul@example.test","password":"motdepasse-solide"})";
     const auto loginResponse = router.dispatch(request);
     REQUIRE(loginResponse.status == 200);
@@ -253,8 +291,8 @@ TEST_CASE("admin api manages map backups and reset") {
     pixelwar::http::Router router;
     pixelwar::storage::PixelMap map(4, 4, 16);
     pixelwar::storage::UserStore store(dir / "users.db");
-    std::string error;
-    REQUIRE(store.registerUser("admin_user", "admin@example.test", "motdepasse-solide", error));
+    const auto registration = store.registerUser("admin_user", "admin@example.test", "motdepasse-solide", false, 86400);
+    REQUIRE(registration.created);
     const auto adminUserId = store.verifyCredentials("admin_user", "motdepasse-solide");
     REQUIRE(adminUserId.has_value());
     pixelwar::security::SessionManager sessions(std::chrono::seconds(60));

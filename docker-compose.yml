@@ -1,0 +1,11 @@
+services:
+  pixelwar:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - pixelwar-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  pixelwar-data:

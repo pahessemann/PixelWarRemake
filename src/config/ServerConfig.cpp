@@ -84,6 +84,22 @@ ServerConfig loadServerConfig(const std::filesystem::path& path) {
     if (auto publicBaseUrl = utils::json::getString(*parsed, "public_base_url")) {
         cfg.publicBaseUrl = *publicBaseUrl;
     }
+    if (auto requireEmail = utils::json::getBool(*parsed, "require_email_verification")) {
+        cfg.requireEmailVerification = *requireEmail;
+    }
+    if (auto exposeLink = utils::json::getBool(*parsed, "expose_local_verification_link")) {
+        cfg.exposeLocalVerificationLink = *exposeLink;
+    }
+    cfg.emailVerificationTtlSeconds = positiveIntOr(
+        utils::json::getInt(*parsed, "email_verification_ttl_seconds"),
+        cfg.emailVerificationTtlSeconds
+    );
+    if (auto failures = utils::json::getInt(*parsed, "login_failure_limit")) {
+        if (*failures > 0 && *failures <= 1000) {
+            cfg.loginFailureLimit = static_cast<std::uint32_t>(*failures);
+        }
+    }
+    cfg.loginLockSeconds = positiveIntOr(utils::json::getInt(*parsed, "login_lock_seconds"), cfg.loginLockSeconds);
     if (auto paletteSize = utils::json::getInt(*parsed, "palette_size")) {
         if (*paletteSize > 0 && *paletteSize <= 256) {
             cfg.paletteSize = static_cast<std::uint8_t>(*paletteSize);
