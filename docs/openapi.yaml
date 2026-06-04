@@ -19,43 +19,53 @@ paths:
           description: Palette entries
   /register:
     post:
-      summary: Disabled local account creation
+      summary: Create a local account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, email, password]
+              properties:
+                username:
+                  type: string
+                  minLength: 3
+                  maxLength: 32
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 8
       responses:
-        "410":
-          description: Verified email authentication is required
+        "200":
+          description: Account created and session token returned
+        "400":
+          description: Invalid input
+        "409":
+          description: Username or email already used
   /login:
     post:
-      summary: Disabled password login
-      responses:
-        "410":
-          description: Verified email authentication is required
-  /auth/status:
-    get:
-      summary: Verified OIDC configuration status
-      responses:
-        "200":
-          description: Whether verified OIDC login is configured
-  /auth/login:
-    get:
-      summary: Redirect to the configured OpenID Connect authorization endpoint
-      responses:
-        "302":
-          description: Redirect to the identity provider
-  /auth/callback:
-    get:
-      summary: OpenID Connect callback
-      parameters:
-        - name: code
-          in: query
-          schema:
-            type: string
-        - name: state
-          in: query
-          schema:
-            type: string
+      summary: Login with username or email
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [login, password]
+              properties:
+                login:
+                  type: string
+                  description: Username or email
+                password:
+                  type: string
       responses:
         "200":
-          description: HTML page that stores the PixelWar session token after email_verified is true
+          description: Session token returned
+        "401":
+          description: Invalid credentials
   /map:
     get:
       summary: Read the pixel map or a diff
@@ -96,7 +106,7 @@ paths:
         "401":
           description: Missing or invalid token
         "403":
-          description: Verified email account required
+          description: Local account required
         "429":
           description: Cooldown still active
   /cooldown:
@@ -110,7 +120,7 @@ paths:
         "401":
           description: Missing or invalid token
         "403":
-          description: Verified email account required
+          description: Local account required
   /admin/summary:
     get:
       summary: Admin dashboard summary
@@ -125,7 +135,7 @@ paths:
           description: Authenticated user is not the configured admin
   /admin/users:
     get:
-      summary: Admin verified-account user list
+      summary: Admin local-account user list
       security:
         - bearerAuth: []
       responses:

@@ -1,22 +1,15 @@
 #include "pixelwar/controllers/ApiController.hpp"
 
-#include "pixelwar/utils/Base64.hpp"
-#include "pixelwar/utils/HttpsClient.hpp"
 #include "pixelwar/utils/Json.hpp"
-#include "pixelwar/utils/Random.hpp"
 #include "pixelwar/storage/MapBackup.hpp"
 
 #include <charconv>
 #include <chrono>
-#include <cctype>
 #include <fstream>
 #include <optional>
 #include <filesystem>
-#include <memory>
-#include <mutex>
 #include <sstream>
 #include <system_error>
-#include <unordered_map>
 #include <vector>
 
 namespace pixelwar::controllers {
@@ -26,50 +19,9 @@ namespace {
 using pixelwar::http::HttpRequest;
 using pixelwar::http::HttpResponse;
 
-constexpr const char* kVerifiedAuthProvider = "oidc";
-
 HttpResponse jsonError(int status, const std::string& code) {
     return HttpResponse::json(status, R"({"error":")" + pixelwar::utils::json::escape(code) + R"("})");
 }
-
-std::int64_t nowSeconds() {
-    return std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::system_clock::now().time_since_epoch()
-    ).count();
-}
-
-class OAuthStateStore {
-public:
-    std::string create() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        const std::string state = utils::base64UrlEncode(utils::randomBytes(32));
-        states_[state] = nowSeconds() + 600;
-        return state;
-    }
-
-    bool consume(const std::string& state) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        const auto now = nowSeconds();
-        for (auto it = states_.begin(); it != states_.end();) {
-            if (it->second <= now) {
-                it = states_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-
-        const auto it = states_.find(state);
-        if (it == states_.end()) {
-            return false;
-        }
-        states_.erase(it);
-        return true;
-    }
-
-private:
-    std::mutex mutex_;
-    std::unordered_map<std::string, std::int64_t> states_;
-};
 
 std::optional<std::uint64_t> parseUint64(const std::string& text) {
     std::uint64_t value = 0;
@@ -80,219 +32,6 @@ std::optional<std::uint64_t> parseUint64(const std::string& text) {
         return std::nullopt;
     }
     return value;
-}
-
-std::string trimTrailingSlash(std::string value) {
-    while (!value.empty() && value.back() == '/') {
-        value.pop_back();
-    }
-    return value;
-}
-
-struct HttpsEndpoint {
-    std::string host;
-    std::string path;
-};
-
-std::optional<HttpsEndpoint> parseHttpsEndpoint(const std::string& endpoint) {
-    constexpr const char* prefix = "https://";
-    if (endpoint.rfind(prefix, 0) != 0) {
-        return std::nullopt;
-    }
-
-    const std::string rest = endpoint.substr(8);
-    const std::size_t slash = rest.find('/');
-    if (slash == std::string::npos || slash == 0) {
-        return std::nullopt;
-    }
-
-    HttpsEndpoint parsed;
-    parsed.host = rest.substr(0, slash);
-    parsed.path = rest.substr(slash);
-    if (parsed.host.empty() || parsed.path.empty()) {
-        return std::nullopt;
-    }
-    return parsed;
-}
-
-bool isOidcConfigured(const config::ServerConfig& cfg) {
-    return !cfg.oidcClientId.empty() &&
-           !cfg.oidcClientSecret.empty() &&
-           !cfg.publicBaseUrl.empty() &&
-           parseHttpsEndpoint(cfg.oidcAuthorizationEndpoint).has_value() &&
-           parseHttpsEndpoint(cfg.oidcTokenEndpoint).has_value() &&
-           parseHttpsEndpoint(cfg.oidcUserinfoEndpoint).has_value();
-}
-
-std::string oidcRedirectUri(const config::ServerConfig& cfg) {
-    return trimTrailingSlash(cfg.publicBaseUrl) + cfg.oidcRedirectPath;
-}
-
-std::string urlEncode(const std::string& value) {
-    std::ostringstream out;
-    constexpr char hex[] = "0123456789ABCDEF";
-    for (const unsigned char c : value) {
-        if ((c >= 'A' && c <= 'Z') ||
-            (c >= 'a' && c <= 'z') ||
-            (c >= '0' && c <= '9') ||
-            c == '-' || c == '_' || c == '.' || c == '~') {
-            out << static_cast<char>(c);
-        } else {
-            out << '%' << hex[(c >> 4) & 0xF] << hex[c & 0xF];
-        }
-    }
-    return out.str();
-}
-
-std::string formBody(const std::unordered_map<std::string, std::string>& values) {
-    std::ostringstream out;
-    bool first = true;
-    for (const auto& [key, value] : values) {
-        if (!first) {
-            out << '&';
-        }
-        first = false;
-        out << urlEncode(key) << '=' << urlEncode(value);
-    }
-    return out.str();
-}
-
-HttpResponse redirectTo(const std::string& location) {
-    auto response = HttpResponse::text(302, "");
-    response.headers["Location"] = location;
-    return response;
-}
-
-HttpResponse htmlResponse(std::string body) {
-    auto response = HttpResponse::text(200, std::move(body));
-    response.headers["Content-Type"] = "text/html; charset=utf-8";
-    return response;
-}
-
-HttpResponse authResultHtml(const std::string& token, const std::string& username) {
-    std::ostringstream out;
-    out << "<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\">"
-        << "<title>Connexion</title></head><body>"
-        << "<script>"
-        << "localStorage.setItem('pixelwar.token',\"" << utils::json::escape(token) << "\");"
-        << "localStorage.setItem('pixelwar.username',\"" << utils::json::escape(username) << "\");"
-        << "location.replace('/');"
-        << "</script>"
-        << "Connexion terminee."
-        << "</body></html>";
-    return htmlResponse(out.str());
-}
-
-HttpResponse authErrorHtml(const std::string& code) {
-    std::ostringstream out;
-    out << "<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\">"
-        << "<title>Connexion</title></head><body>"
-        << "<script>"
-        << "localStorage.removeItem('pixelwar.token');"
-        << "localStorage.removeItem('pixelwar.username');"
-        << "location.replace('/?auth_error=" << urlEncode(code) << "');"
-        << "</script>"
-        << "Connexion impossible."
-        << "</body></html>";
-    return htmlResponse(out.str());
-}
-
-struct OidcToken {
-    std::string accessToken;
-};
-
-struct VerifiedIdentity {
-    std::string subject;
-    std::string username;
-    std::string email;
-};
-
-struct IdentityResult {
-    std::optional<VerifiedIdentity> identity;
-    std::string error;
-};
-
-std::optional<OidcToken> exchangeOidcCode(const config::ServerConfig& cfg, const std::string& code) {
-    const auto endpoint = parseHttpsEndpoint(cfg.oidcTokenEndpoint);
-    if (!endpoint) {
-        return std::nullopt;
-    }
-
-    const std::string body = formBody({
-        {"client_id", cfg.oidcClientId},
-        {"client_secret", cfg.oidcClientSecret},
-        {"grant_type", "authorization_code"},
-        {"code", code},
-        {"redirect_uri", oidcRedirectUri(cfg)}
-    });
-
-    const auto response = utils::httpsRequest(
-        "POST",
-        endpoint->host,
-        endpoint->path,
-        {
-            {"Content-Type", "application/x-www-form-urlencoded"},
-            {"Accept", "application/json"}
-        },
-        body
-    );
-    if (response.status < 200 || response.status >= 300) {
-        return std::nullopt;
-    }
-
-    const auto parsed = utils::json::parseObject(response.body);
-    if (!parsed) {
-        return std::nullopt;
-    }
-
-    const auto accessToken = utils::json::getString(*parsed, "access_token");
-    if (!accessToken || accessToken->empty()) {
-        return std::nullopt;
-    }
-    return OidcToken{*accessToken};
-}
-
-IdentityResult fetchVerifiedIdentity(const config::ServerConfig& cfg, const std::string& accessToken) {
-    const auto endpoint = parseHttpsEndpoint(cfg.oidcUserinfoEndpoint);
-    if (!endpoint) {
-        return {{}, "invalid_oidc_userinfo_endpoint"};
-    }
-
-    const auto response = utils::httpsRequest(
-        "GET",
-        endpoint->host,
-        endpoint->path,
-        {
-            {"Authorization", "Bearer " + accessToken},
-            {"Accept", "application/json"}
-        },
-        ""
-    );
-    if (response.status < 200 || response.status >= 300) {
-        return {{}, "oidc_userinfo_failed"};
-    }
-
-    const auto parsed = utils::json::parseObject(response.body);
-    if (!parsed) {
-        return {{}, "oidc_userinfo_invalid"};
-    }
-
-    const auto subject = utils::json::getString(*parsed, "sub");
-    const auto email = utils::json::getString(*parsed, "email");
-    const auto emailVerified = utils::json::getBool(*parsed, "email_verified");
-    if (!subject || subject->empty()) {
-        return {{}, "missing_subject"};
-    }
-    if (!email || email->empty()) {
-        return {{}, "missing_email"};
-    }
-    if (!emailVerified || !*emailVerified) {
-        return {{}, "email_not_verified"};
-    }
-
-    std::string username = utils::json::getString(*parsed, "preferred_username")
-        .value_or(utils::json::getString(*parsed, "name").value_or(*email));
-    return {VerifiedIdentity{*subject, username, *email}, {}};
 }
 
 std::optional<std::string> tokenFromRequest(const HttpRequest& request, const std::optional<pixelwar::utils::json::Object>& body = std::nullopt) {
@@ -355,7 +94,7 @@ std::string quotaJson(const storage::PixelQuotaStatus& status, std::int64_t cool
     return out.str();
 }
 
-std::optional<HttpResponse> verifiedSessionGuard(
+std::optional<HttpResponse> sessionGuard(
     const HttpRequest& request,
     const storage::UserStore& userStore,
     pixelwar::security::SessionManager& sessions,
@@ -373,8 +112,8 @@ std::optional<HttpResponse> verifiedSessionGuard(
     }
 
     const auto user = userStore.findById(*sessionUserId);
-    if (!user || user->oauthProvider != kVerifiedAuthProvider || user->oauthSubject.empty() || user->email.empty()) {
-        return jsonError(403, "verified_email_auth_required");
+    if (!user || user->passwordHash.empty() || user->email.empty()) {
+        return jsonError(403, "local_account_required");
     }
 
     userId = *sessionUserId;
@@ -388,19 +127,13 @@ std::optional<HttpResponse> adminGuard(
     const config::ServerConfig& cfg
 ) {
     std::uint64_t userId = 0;
-    if (auto error = verifiedSessionGuard(request, userStore, sessions, userId)) {
+    if (auto error = sessionGuard(request, userStore, sessions, userId)) {
         return *error;
     }
 
     const auto user = userStore.findById(userId);
     if (!user) {
         return jsonError(403, "forbidden");
-    }
-    if (!cfg.adminOidcSubject.empty()) {
-        if (user->oauthSubject != cfg.adminOidcSubject) {
-            return jsonError(403, "forbidden");
-        }
-        return std::nullopt;
     }
     if (user->username != cfg.adminUsername) {
         return jsonError(403, "forbidden");
@@ -487,7 +220,6 @@ void registerApiRoutes(
     const config::ServerConfig& cfg
 ) {
     const auto mapPath = cfg.dataDir / "map.pwm";
-    const auto oauthStates = std::make_shared<OAuthStateStore>();
 
     router.add("GET", "/health", [&pixelMap](const HttpRequest&) {
         std::ostringstream out;
@@ -499,76 +231,75 @@ void registerApiRoutes(
         return HttpResponse::json(200, paletteJson(cfg.paletteSize));
     });
 
-    router.add("GET", "/auth/status", [&cfg](const HttpRequest&) {
-        std::ostringstream out;
-        out << R"({"enabled":)" << (isOidcConfigured(cfg) ? "true" : "false")
-            << R"(,"provider":")" << utils::json::escape(cfg.oidcProviderName) << '"'
-            << R"(,"login_url":"/auth/login"})";
-        return HttpResponse::json(200, out.str());
-    });
-
-    router.add("GET", "/auth/login", [&cfg, oauthStates](const HttpRequest&) {
-        if (!isOidcConfigured(cfg)) {
-            return authErrorHtml("oidc_not_configured");
+    router.add("POST", "/register", [&userStore, &sessions, &rateLimiter](const HttpRequest& request) {
+        const std::string clientKey = request.remoteAddress.empty() ? "local" : request.remoteAddress;
+        if (!rateLimiter.allow("register:" + clientKey, 20, std::chrono::minutes(1))) {
+            return jsonError(429, "rate_limited");
         }
 
-        const auto endpoint = parseHttpsEndpoint(cfg.oidcAuthorizationEndpoint);
-        if (!endpoint) {
-            return authErrorHtml("invalid_oidc_authorization_endpoint");
+        const auto body = parseJsonBody(request);
+        if (!body) {
+            return jsonError(400, "invalid_json");
         }
 
-        const std::string state = oauthStates->create();
-        const std::string url = cfg.oidcAuthorizationEndpoint +
-            "?response_type=code"
-            "&client_id=" + urlEncode(cfg.oidcClientId) +
-            "&scope=" + urlEncode("openid profile email") +
-            "&redirect_uri=" + urlEncode(oidcRedirectUri(cfg)) +
-            "&state=" + urlEncode(state);
-        return redirectTo(url);
-    });
-
-    router.add("GET", cfg.oidcRedirectPath, [&userStore, &sessions, &cfg, oauthStates](const HttpRequest& request) {
-        if (const auto error = request.queryValue("error")) {
-            return authErrorHtml(*error);
+        const auto username = utils::json::getString(*body, "username");
+        const auto email = utils::json::getString(*body, "email");
+        const auto password = utils::json::getString(*body, "password");
+        if (!username || !email || !password) {
+            return jsonError(400, "missing_credentials");
         }
 
-        const auto code = request.queryValue("code");
-        const auto state = request.queryValue("state");
-        if (!code || !state || !oauthStates->consume(*state)) {
-            return authErrorHtml("invalid_oauth_state");
+        std::string error;
+        if (!userStore.registerUser(*username, *email, *password, error)) {
+            const int status = error == "username_taken" || error == "email_taken" ? 409 : 400;
+            return jsonError(status, error);
         }
 
-        const auto oidcToken = exchangeOidcCode(cfg, *code);
-        if (!oidcToken) {
-            return authErrorHtml("oidc_token_exchange_failed");
+        const auto userId = userStore.verifyCredentials(*username, *password);
+        if (!userId) {
+            return jsonError(500, "session_creation_failed");
         }
-
-        const auto identity = fetchVerifiedIdentity(cfg, oidcToken->accessToken);
-        if (!identity.identity) {
-            return authErrorHtml(identity.error.empty() ? "oidc_user_fetch_failed" : identity.error);
-        }
-
-        const auto userId = userStore.upsertOAuthUser(
-            kVerifiedAuthProvider,
-            identity.identity->subject,
-            identity.identity->username,
-            identity.identity->email
+        const std::string token = sessions.createSession(*userId);
+        return HttpResponse::json(
+            200,
+            R"({"status":"registered","token":")" + utils::json::escape(token) +
+                R"(","username":")" + utils::json::escape(*username) + R"("})"
         );
-        const auto localUser = userStore.findById(userId);
-        if (!localUser) {
-            return authErrorHtml("local_user_failed");
+    });
+
+    router.add("POST", "/login", [&userStore, &sessions, &rateLimiter](const HttpRequest& request) {
+        const std::string clientKey = request.remoteAddress.empty() ? "local" : request.remoteAddress;
+        if (!rateLimiter.allow("login:" + clientKey, 30, std::chrono::minutes(1))) {
+            return jsonError(429, "rate_limited");
         }
 
-        const std::string token = sessions.createSession(userId);
-        return authResultHtml(token, localUser->username);
-    });
+        const auto body = parseJsonBody(request);
+        if (!body) {
+            return jsonError(400, "invalid_json");
+        }
 
-    router.add("POST", "/register", [](const HttpRequest&) {
-        return jsonError(410, "verified_email_auth_required");
-    });
+        const std::string login = utils::json::getString(*body, "login")
+            .value_or(utils::json::getString(*body, "username").value_or(""));
+        const auto password = utils::json::getString(*body, "password");
+        if (login.empty() || !password) {
+            return jsonError(400, "missing_credentials");
+        }
 
-    router.add("POST", "/login", [](const HttpRequest&) {
-        return jsonError(410, "verified_email_auth_required");
+        const auto userId = userStore.verifyCredentials(login, *password);
+        if (!userId) {
+            return jsonError(401, "invalid_credentials");
+        }
+
+        const auto user = userStore.findById(*userId);
+        if (!user) {
+            return jsonError(401, "invalid_credentials");
+        }
+        const std::string token = sessions.createSession(*userId);
+        return HttpResponse::json(
+            200,
+            R"({"token":")" + utils::json::escape(token) +
+                R"(","username":")" + utils::json::escape(user->username) + R"("})"
+        );
     });
 
     router.add("GET", "/map", [&pixelMap](const HttpRequest& request) {
@@ -589,7 +320,7 @@ void registerApiRoutes(
         }
 
         std::uint64_t userId = 0;
-        if (auto error = verifiedSessionGuard(request, userStore, sessions, userId, body)) {
+        if (auto error = sessionGuard(request, userStore, sessions, userId, body)) {
             return *error;
         }
 
@@ -641,7 +372,7 @@ void registerApiRoutes(
 
     router.add("GET", "/cooldown", [&userStore, &sessions, &cfg](const HttpRequest& request) {
         std::uint64_t userId = 0;
-        if (auto error = verifiedSessionGuard(request, userStore, sessions, userId)) {
+        if (auto error = sessionGuard(request, userStore, sessions, userId)) {
             return *error;
         }
 

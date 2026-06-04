@@ -3,7 +3,7 @@
 const state = {
   token: localStorage.getItem("pixelwar.token") || "",
   username: localStorage.getItem("pixelwar.username") || "",
-  authEnabled: false,
+  authMode: "login",
   palette: [],
   selectedColor: 0,
   width: 1,
@@ -41,9 +41,16 @@ const els = {
   logoutButton: document.getElementById("logoutButton"),
   authConnected: document.getElementById("authConnected"),
   connectedUsername: document.getElementById("connectedUsername"),
-  verifiedAuth: document.getElementById("verifiedAuth"),
-  verifiedLoginLink: document.getElementById("verifiedLoginLink"),
-  authConfigNotice: document.getElementById("authConfigNotice"),
+  localAuth: document.getElementById("localAuth"),
+  loginTab: document.getElementById("loginTab"),
+  registerTab: document.getElementById("registerTab"),
+  authForm: document.getElementById("authForm"),
+  loginLabel: document.getElementById("loginLabel"),
+  loginInput: document.getElementById("loginInput"),
+  emailField: document.getElementById("emailField"),
+  emailInput: document.getElementById("emailInput"),
+  passwordInput: document.getElementById("passwordInput"),
+  authSubmitButton: document.getElementById("authSubmitButton"),
   paletteGrid: document.getElementById("paletteGrid"),
   selectedColorLabel: document.getElementById("selectedColorLabel"),
   targetCellLabel: document.getElementById("targetCellLabel"),
@@ -80,18 +87,15 @@ function updateAuthUi() {
     els.connectionLabel.textContent = `Connecté : ${username}`;
     els.connectedUsername.textContent = username;
     els.authConnected.classList.remove("hidden");
-    els.verifiedAuth.classList.add("hidden");
+    els.localAuth.classList.add("hidden");
     els.logoutButton.classList.remove("hidden");
   } else {
     els.connectionLabel.textContent = "Invite";
     els.connectedUsername.textContent = "-";
     els.authConnected.classList.add("hidden");
-    els.verifiedAuth.classList.remove("hidden");
+    els.localAuth.classList.remove("hidden");
     els.logoutButton.classList.add("hidden");
   }
-
-  els.verifiedLoginLink.classList.toggle("disabled-link", !state.authEnabled);
-  els.authConfigNotice.classList.toggle("hidden", state.authEnabled);
 }
 
 async function api(path, options = {}) {
@@ -327,21 +331,56 @@ async function refreshCooldown() {
   }
 }
 
-async function loadAuthStatus() {
+function setAuthMode(mode) {
+  state.authMode = mode === "register" ? "register" : "login";
+  const isRegister = state.authMode === "register";
+  els.loginTab.classList.toggle("active", !isRegister);
+  els.registerTab.classList.toggle("active", isRegister);
+  els.loginTab.setAttribute("aria-selected", String(!isRegister));
+  els.registerTab.setAttribute("aria-selected", String(isRegister));
+  els.emailField.classList.toggle("hidden", !isRegister);
+  els.emailInput.required = isRegister;
+  els.loginLabel.textContent = isRegister ? "Pseudo" : "Pseudo ou email";
+  els.loginInput.name = isRegister ? "username" : "login";
+  els.loginInput.autocomplete = isRegister ? "username" : "username";
+  els.passwordInput.autocomplete = isRegister ? "new-password" : "current-password";
+  els.authSubmitButton.textContent = isRegister ? "Register" : "Login";
+}
+
+async function submitAuthForm(event) {
+  event.preventDefault();
+  const login = els.loginInput.value.trim();
+  const email = els.emailInput.value.trim();
+  const password = els.passwordInput.value;
+  if (!login || !password || (state.authMode === "register" && !email)) {
+    setStatus("Compte: champs manquants");
+    return;
+  }
+
+  els.authSubmitButton.disabled = true;
   try {
-    const status = await api("/auth/status");
-    state.authEnabled = Boolean(status.enabled);
-    if (status.login_url) {
-      els.verifiedLoginLink.href = status.login_url;
-    }
-    if (status.provider) {
-      els.verifiedLoginLink.textContent = `Connexion ${status.provider}`;
-    }
+    const payload = state.authMode === "register"
+      ? await api("/register", {
+          method: "POST",
+          body: JSON.stringify({ username: login, email, password })
+        })
+      : await api("/login", {
+          method: "POST",
+          body: JSON.stringify({ login, password })
+        });
+
+    state.token = payload.token || "";
+    state.username = payload.username || login;
+    localStorage.setItem("pixelwar.token", state.token);
+    localStorage.setItem("pixelwar.username", state.username);
+    els.passwordInput.value = "";
     updateAuthUi();
+    await refreshCooldown();
+    setStatus(state.authMode === "register" ? "Compte cree" : "Connecte");
   } catch (error) {
-    state.authEnabled = false;
-    updateAuthUi();
-    setStatus(`Auth: ${error.message}`);
+    setStatus(`Compte: ${error.message}`);
+  } finally {
+    els.authSubmitButton.disabled = false;
   }
 }
 
@@ -702,13 +741,11 @@ async function init() {
 
   updateAuthUi();
   updateCooldownUi();
+  setAuthMode("login");
 
-  els.verifiedLoginLink.addEventListener("click", (event) => {
-    if (!state.authEnabled) {
-      event.preventDefault();
-      setStatus("Authentification verifiee non configuree");
-    }
-  });
+  els.loginTab.addEventListener("click", () => setAuthMode("login"));
+  els.registerTab.addEventListener("click", () => setAuthMode("register"));
+  els.authForm.addEventListener("submit", submitAuthForm);
   els.logoutButton.addEventListener("click", logout);
   els.refreshButton.addEventListener("click", refreshMap);
   els.placeButton.addEventListener("click", () => placeSelectedPixel(state.selectedColor));
@@ -729,7 +766,6 @@ async function init() {
   window.addEventListener("resize", refreshViewportAroundCurrentCell);
 
   try {
-    await loadAuthStatus();
     await loadPalette();
     await loadMap(true);
     await refreshCooldown();

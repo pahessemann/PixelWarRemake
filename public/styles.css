@@ -181,7 +181,7 @@ a {
   overflow-wrap: anywhere;
 }
 
-.oauth-card {
+.auth-card {
   display: grid;
   gap: 12px;
   padding: 12px;
@@ -189,7 +189,7 @@ a {
   background: #11161e;
 }
 
-.oauth-card span,
+.auth-card span,
 .auth-note {
   color: var(--muted);
   font-size: 13px;

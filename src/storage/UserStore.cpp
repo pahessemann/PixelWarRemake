@@ -1,5 +1,6 @@
 #include "pixelwar/storage/UserStore.hpp"
 
+#include "pixelwar/security/PasswordHasher.hpp"
 #include "pixelwar/utils/Base64.hpp"
 
 #include <algorithm>
@@ -64,10 +65,6 @@ std::optional<std::uint32_t> parseUint32(const std::string& text) {
     return static_cast<std::uint32_t>(*value);
 }
 
-std::string oauthKey(const std::string& provider, const std::string& subject) {
-    return provider + ":" + subject;
-}
-
 std::string decodeBase64Text(const std::string& encoded) {
     const auto bytes = utils::base64Decode(encoded);
     if (!bytes) {
@@ -80,68 +77,33 @@ std::string encodeText(const std::string& text) {
     return utils::base64Encode(std::vector<std::uint8_t>(text.begin(), text.end()));
 }
 
-std::string sanitizeUsername(const std::string& preferred, const std::string& subject) {
-    std::string out;
-    out.reserve(preferred.size());
-
-    for (const unsigned char c : preferred) {
-        if (std::isalnum(c) || c == '_' || c == '-') {
-            out.push_back(static_cast<char>(std::tolower(c)));
-        } else if (c == ' ' || c == '.') {
-            out.push_back('_');
-        }
-    }
-
-    while (!out.empty() && out.front() == '_') {
-        out.erase(out.begin());
-    }
-    while (!out.empty() && out.back() == '_') {
-        out.pop_back();
-    }
-
-    if (out.size() < 3) {
-        out = "user_" + subject.substr(subject.size() > 8 ? subject.size() - 8 : 0);
-    }
-    if (out.size() > 24) {
-        out.resize(24);
-    }
-    return out;
+std::string normalizeEmail(std::string email) {
+    std::transform(email.begin(), email.end(), email.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return email;
 }
 
-std::string uniqueUsername(
-    const std::string& preferred,
-    const std::string& subject,
-    const std::unordered_map<std::string, std::uint64_t>& existing
-) {
-    std::string username = sanitizeUsername(preferred, subject);
-    if (existing.find(username) == existing.end()) {
-        return username;
+bool isValidEmail(const std::string& email) {
+    if (email.size() < 5 || email.size() > 254) {
+        return false;
+    }
+    if (std::any_of(email.begin(), email.end(), [](unsigned char c) {
+            return std::isspace(c) || c < 33 || c > 126;
+        })) {
+        return false;
     }
 
-    const std::string suffix = "_" + subject.substr(subject.size() > 6 ? subject.size() - 6 : 0);
-    const std::size_t maxBase = 32 > suffix.size() ? 32 - suffix.size() : 16;
-    if (username.size() > maxBase) {
-        username.resize(maxBase);
+    const auto at = email.find('@');
+    if (at == std::string::npos || at == 0 || at + 1 >= email.size()) {
+        return false;
     }
-    username += suffix;
-
-    if (existing.find(username) == existing.end()) {
-        return username;
+    if (email.find('@', at + 1) != std::string::npos) {
+        return false;
     }
 
-    for (int i = 2; i < 1000; ++i) {
-        std::string candidate = username;
-        const std::string number = "_" + std::to_string(i);
-        if (candidate.size() + number.size() > 32) {
-            candidate.resize(32 - number.size());
-        }
-        candidate += number;
-        if (existing.find(candidate) == existing.end()) {
-            return candidate;
-        }
-    }
-
-    return "user_" + std::to_string(existing.size() + 1);
+    const auto dot = email.find('.', at + 2);
+    return dot != std::string::npos && dot + 1 < email.size();
 }
 
 } // namespace
@@ -157,7 +119,7 @@ bool UserStore::load() {
 
     usersById_.clear();
     userIdsByName_.clear();
-    userIdsByOAuth_.clear();
+    userIdsByEmail_.clear();
     nextId_ = 1;
 
     std::string line;
@@ -193,17 +155,13 @@ bool UserStore::load() {
         user.pixelWindowStartTimestamp = *windowStart;
         user.pixelsPlacedInWindow = *placedInWindow;
 
-        user.oauthProvider = decodeBase64Text(parts[6]);
-        user.oauthSubject = decodeBase64Text(parts[7]);
-        user.email = decodeBase64Text(parts[8]);
-        if (user.oauthProvider.empty() || user.oauthSubject.empty() || user.email.empty()) {
+        user.email = normalizeEmail(decodeBase64Text(parts[8]));
+        if (user.passwordHash.empty() || user.email.empty()) {
             continue;
         }
 
         userIdsByName_[user.username] = user.id;
-        if (!user.oauthProvider.empty() && !user.oauthSubject.empty()) {
-            userIdsByOAuth_[oauthKey(user.oauthProvider, user.oauthSubject)] = user.id;
-        }
+        userIdsByEmail_[user.email] = user.id;
         usersById_[user.id] = std::move(user);
         nextId_ = std::max(nextId_, *id + 1);
     }
@@ -222,7 +180,7 @@ void UserStore::save() const {
     }
 
     for (const auto& [id, user] : usersById_) {
-        if (user.oauthProvider.empty() || user.oauthSubject.empty() || user.email.empty()) {
+        if (user.passwordHash.empty() || user.email.empty()) {
             continue;
         }
         file << id << '\t'
@@ -231,71 +189,88 @@ void UserStore::save() const {
              << user.lastPixelTimestamp << '\t'
              << user.pixelWindowStartTimestamp << '\t'
              << user.pixelsPlacedInWindow << '\t'
-             << encodeText(user.oauthProvider) << '\t'
-             << encodeText(user.oauthSubject) << '\t'
+             << '\t'
+             << '\t'
              << encodeText(user.email) << '\n';
     }
 }
 
-bool UserStore::registerUser(const std::string& username, const std::string& password, std::string& error) {
-    (void)username;
-    (void)password;
-    error = "verified_email_auth_required";
-    return false;
-}
-
-std::optional<std::uint64_t> UserStore::verifyCredentials(const std::string& username, const std::string& password) {
-    (void)username;
-    (void)password;
-    return std::nullopt;
-}
-
-std::uint64_t UserStore::upsertOAuthUser(
-    const std::string& provider,
-    const std::string& subject,
-    const std::string& preferredUsername,
-    const std::string& email
+bool UserStore::registerUser(
+    const std::string& username,
+    const std::string& email,
+    const std::string& password,
+    std::string& error
 ) {
-    if (provider.empty() || subject.empty() || email.empty()) {
-        return 0;
+    if (!models::isValidUsername(username)) {
+        error = "invalid_username";
+        return false;
+    }
+    const std::string normalizedEmail = normalizeEmail(email);
+    if (!isValidEmail(normalizedEmail)) {
+        error = "invalid_email";
+        return false;
+    }
+    if (!models::isValidPassword(password)) {
+        error = "invalid_password";
+        return false;
     }
 
-    std::uint64_t userId = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        const auto existing = userIdsByOAuth_.find(oauthKey(provider, subject));
-        if (existing != userIdsByOAuth_.end()) {
-            const auto userIt = usersById_.find(existing->second);
-            if (userIt != usersById_.end()) {
-                userIt->second.email = email;
-                if (!preferredUsername.empty()) {
-                    userIt->second.username = userIt->second.username.empty()
-                        ? uniqueUsername(preferredUsername, subject, userIdsByName_)
-                        : userIt->second.username;
-                }
-                userId = userIt->second.id;
-            }
-        } else {
-            models::User user;
-            user.id = nextId_++;
-            user.username = uniqueUsername(preferredUsername, subject, userIdsByName_);
-            user.passwordHash = "";
-            user.oauthProvider = provider;
-            user.oauthSubject = subject;
-            user.email = email;
-            user.lastPixelTimestamp = 0;
-            user.pixelWindowStartTimestamp = 0;
-            user.pixelsPlacedInWindow = 0;
-
-            userIdsByName_[user.username] = user.id;
-            userIdsByOAuth_[oauthKey(provider, subject)] = user.id;
-            userId = user.id;
-            usersById_[user.id] = std::move(user);
+        if (userIdsByName_.find(username) != userIdsByName_.end()) {
+            error = "username_taken";
+            return false;
         }
+        if (userIdsByEmail_.find(normalizedEmail) != userIdsByEmail_.end()) {
+            error = "email_taken";
+            return false;
+        }
+
+        models::User user;
+        user.id = nextId_++;
+        user.username = username;
+        user.email = normalizedEmail;
+        user.passwordHash = security::PasswordHasher::hashPassword(password);
+        user.lastPixelTimestamp = 0;
+        user.pixelWindowStartTimestamp = 0;
+        user.pixelsPlacedInWindow = 0;
+
+        userIdsByName_[user.username] = user.id;
+        userIdsByEmail_[user.email] = user.id;
+        usersById_[user.id] = std::move(user);
     }
 
     save();
-    return userId;
+    error.clear();
+    return true;
+}
+
+std::optional<std::uint64_t> UserStore::verifyCredentials(const std::string& login, const std::string& password) {
+    models::User user;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::optional<std::uint64_t> userId;
+        if (const auto byName = userIdsByName_.find(login); byName != userIdsByName_.end()) {
+            userId = byName->second;
+        } else if (const auto byEmail = userIdsByEmail_.find(normalizeEmail(login)); byEmail != userIdsByEmail_.end()) {
+            userId = byEmail->second;
+        }
+
+        if (!userId) {
+            return std::nullopt;
+        }
+
+        const auto it = usersById_.find(*userId);
+        if (it == usersById_.end() || it->second.passwordHash.empty()) {
+            return std::nullopt;
+        }
+        user = it->second;
+    }
+
+    if (!security::PasswordHasher::verifyPassword(password, user.passwordHash)) {
+        return std::nullopt;
+    }
+    return user.id;
 }
 
 std::optional<models::User> UserStore::findById(std::uint64_t id) const {

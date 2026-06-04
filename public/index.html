@@ -7,7 +7,7 @@
   <title>PixelWarRemake</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="manifest" href="/site.webmanifest">
-  <link rel="stylesheet" href="/styles.css?v=verified-auth-v1">
+  <link rel="stylesheet" href="/styles.css?v=local-auth-v1">
 </head>
 <body>
   <div class="app-shell">
@@ -39,10 +39,26 @@
             <strong id="connectedUsername">-</strong>
           </div>
 
-          <div id="verifiedAuth" class="oauth-card">
-            <span>Connexion obligatoire avec un compte dont l'email est verifie.</span>
-            <a id="verifiedLoginLink" class="primary-button auth-link" href="/auth/login">Connexion securisee</a>
-            <p id="authConfigNotice" class="auth-note hidden">L'authentification verifiee n'est pas encore configuree cote serveur.</p>
+          <div id="localAuth" class="auth-card">
+            <div class="segmented" role="tablist" aria-label="Connexion">
+              <button id="loginTab" class="segment active" type="button" role="tab" aria-selected="true">Login</button>
+              <button id="registerTab" class="segment" type="button" role="tab" aria-selected="false">Register</button>
+            </div>
+            <form id="authForm" class="form-grid">
+              <label>
+                <span id="loginLabel">Pseudo ou email</span>
+                <input id="loginInput" name="login" type="text" autocomplete="username" required>
+              </label>
+              <label id="emailField" class="hidden">
+                Email
+                <input id="emailInput" name="email" type="email" autocomplete="email">
+              </label>
+              <label>
+                Password
+                <input id="passwordInput" name="password" type="password" autocomplete="current-password" required>
+              </label>
+              <button id="authSubmitButton" class="primary-button" type="submit">Login</button>
+            </form>
           </div>
         </section>
 
@@ -103,6 +119,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=verified-auth-v1" defer></script>
+  <script src="/app.js?v=local-auth-v1" defer></script>
 </body>
 </html>

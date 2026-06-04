@@ -9,8 +9,6 @@ struct User {
     std::uint64_t id = 0;
     std::string username;
     std::string passwordHash;
-    std::string oauthProvider;
-    std::string oauthSubject;
     std::string email;
     std::int64_t lastPixelTimestamp = 0;
     std::int64_t pixelWindowStartTimestamp = 0;
