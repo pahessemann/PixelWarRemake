@@ -161,19 +161,8 @@ ctest --test-dir build --output-on-failure
 
 Les scenarios de charge et securite sont detailles dans `docs/testing.md`.
 
-## Workflow Git recommande
+## Idee: authentification en deux facteurs
 
-```bash
-git config user.name "Paul Hessemann"
-git config user.email "ton_email"
+Pour une version publique plus fiable contre les faux emails, l'evolution la plus simple serait d'ajouter une confirmation email obligatoire avant d'activer le compte: le serveur genere un token aleatoire, envoie un lien de validation, puis refuse `/login` tant que `email_verified` reste faux.
 
-git checkout -b dev
-git checkout -b feature/pixel-api
-git commit -m "[feature] Ajout endpoint /pixel"
-```
-
-Branches:
-
-- `main`: stable
-- `dev`: developpement
-- `feature/*`: nouvelles fonctionnalites
+Une seconde etape serait l'authentification en deux facteurs, d'abord pour les administrateurs puis pour tous les comptes: TOTP compatible Google Authenticator/Authy, QR code d'activation, codes de secours a usage unique, et verification du code apres le mot de passe avant de creer la session Bearer.
