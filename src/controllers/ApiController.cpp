@@ -8,6 +8,7 @@
 
 #include <charconv>
 #include <chrono>
+#include <cctype>
 #include <fstream>
 #include <optional>
 #include <filesystem>
@@ -24,6 +25,8 @@ namespace {
 
 using pixelwar::http::HttpRequest;
 using pixelwar::http::HttpResponse;
+
+constexpr const char* kVerifiedAuthProvider = "oidc";
 
 HttpResponse jsonError(int status, const std::string& code) {
     return HttpResponse::json(status, R"({"error":")" + pixelwar::utils::json::escape(code) + R"("})");
@@ -79,10 +82,6 @@ std::optional<std::uint64_t> parseUint64(const std::string& text) {
     return value;
 }
 
-bool isDiscordOAuthConfigured(const config::ServerConfig& cfg) {
-    return !cfg.discordClientId.empty() && !cfg.discordClientSecret.empty() && !cfg.publicBaseUrl.empty();
-}
-
 std::string trimTrailingSlash(std::string value) {
     while (!value.empty() && value.back() == '/') {
         value.pop_back();
@@ -90,8 +89,43 @@ std::string trimTrailingSlash(std::string value) {
     return value;
 }
 
-std::string discordRedirectUri(const config::ServerConfig& cfg) {
-    return trimTrailingSlash(cfg.publicBaseUrl) + cfg.discordRedirectPath;
+struct HttpsEndpoint {
+    std::string host;
+    std::string path;
+};
+
+std::optional<HttpsEndpoint> parseHttpsEndpoint(const std::string& endpoint) {
+    constexpr const char* prefix = "https://";
+    if (endpoint.rfind(prefix, 0) != 0) {
+        return std::nullopt;
+    }
+
+    const std::string rest = endpoint.substr(8);
+    const std::size_t slash = rest.find('/');
+    if (slash == std::string::npos || slash == 0) {
+        return std::nullopt;
+    }
+
+    HttpsEndpoint parsed;
+    parsed.host = rest.substr(0, slash);
+    parsed.path = rest.substr(slash);
+    if (parsed.host.empty() || parsed.path.empty()) {
+        return std::nullopt;
+    }
+    return parsed;
+}
+
+bool isOidcConfigured(const config::ServerConfig& cfg) {
+    return !cfg.oidcClientId.empty() &&
+           !cfg.oidcClientSecret.empty() &&
+           !cfg.publicBaseUrl.empty() &&
+           parseHttpsEndpoint(cfg.oidcAuthorizationEndpoint).has_value() &&
+           parseHttpsEndpoint(cfg.oidcTokenEndpoint).has_value() &&
+           parseHttpsEndpoint(cfg.oidcUserinfoEndpoint).has_value();
+}
+
+std::string oidcRedirectUri(const config::ServerConfig& cfg) {
+    return trimTrailingSlash(cfg.publicBaseUrl) + cfg.oidcRedirectPath;
 }
 
 std::string urlEncode(const std::string& value) {
@@ -138,13 +172,13 @@ HttpResponse htmlResponse(std::string body) {
 HttpResponse authResultHtml(const std::string& token, const std::string& username) {
     std::ostringstream out;
     out << "<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\">"
-        << "<title>Connexion Discord</title></head><body>"
+        << "<title>Connexion</title></head><body>"
         << "<script>"
         << "localStorage.setItem('pixelwar.token',\"" << utils::json::escape(token) << "\");"
         << "localStorage.setItem('pixelwar.username',\"" << utils::json::escape(username) << "\");"
         << "location.replace('/');"
         << "</script>"
-        << "Connexion Discord terminee."
+        << "Connexion terminee."
         << "</body></html>";
     return htmlResponse(out.str());
 }
@@ -152,40 +186,50 @@ HttpResponse authResultHtml(const std::string& token, const std::string& usernam
 HttpResponse authErrorHtml(const std::string& code) {
     std::ostringstream out;
     out << "<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\">"
-        << "<title>Connexion Discord</title></head><body>"
+        << "<title>Connexion</title></head><body>"
         << "<script>"
         << "localStorage.removeItem('pixelwar.token');"
         << "localStorage.removeItem('pixelwar.username');"
         << "location.replace('/?auth_error=" << urlEncode(code) << "');"
         << "</script>"
-        << "Connexion Discord impossible."
+        << "Connexion impossible."
         << "</body></html>";
     return htmlResponse(out.str());
 }
 
-struct DiscordToken {
+struct OidcToken {
     std::string accessToken;
 };
 
-struct DiscordUser {
-    std::string id;
+struct VerifiedIdentity {
+    std::string subject;
     std::string username;
     std::string email;
 };
 
-std::optional<DiscordToken> exchangeDiscordCode(const config::ServerConfig& cfg, const std::string& code) {
+struct IdentityResult {
+    std::optional<VerifiedIdentity> identity;
+    std::string error;
+};
+
+std::optional<OidcToken> exchangeOidcCode(const config::ServerConfig& cfg, const std::string& code) {
+    const auto endpoint = parseHttpsEndpoint(cfg.oidcTokenEndpoint);
+    if (!endpoint) {
+        return std::nullopt;
+    }
+
     const std::string body = formBody({
-        {"client_id", cfg.discordClientId},
-        {"client_secret", cfg.discordClientSecret},
+        {"client_id", cfg.oidcClientId},
+        {"client_secret", cfg.oidcClientSecret},
         {"grant_type", "authorization_code"},
         {"code", code},
-        {"redirect_uri", discordRedirectUri(cfg)}
+        {"redirect_uri", oidcRedirectUri(cfg)}
     });
 
     const auto response = utils::httpsRequest(
         "POST",
-        "discord.com",
-        "/api/oauth2/token",
+        endpoint->host,
+        endpoint->path,
         {
             {"Content-Type", "application/x-www-form-urlencoded"},
             {"Accept", "application/json"}
@@ -205,14 +249,19 @@ std::optional<DiscordToken> exchangeDiscordCode(const config::ServerConfig& cfg,
     if (!accessToken || accessToken->empty()) {
         return std::nullopt;
     }
-    return DiscordToken{*accessToken};
+    return OidcToken{*accessToken};
 }
 
-std::optional<DiscordUser> fetchDiscordUser(const std::string& accessToken) {
+IdentityResult fetchVerifiedIdentity(const config::ServerConfig& cfg, const std::string& accessToken) {
+    const auto endpoint = parseHttpsEndpoint(cfg.oidcUserinfoEndpoint);
+    if (!endpoint) {
+        return {{}, "invalid_oidc_userinfo_endpoint"};
+    }
+
     const auto response = utils::httpsRequest(
         "GET",
-        "discord.com",
-        "/api/users/@me",
+        endpoint->host,
+        endpoint->path,
         {
             {"Authorization", "Bearer " + accessToken},
             {"Accept", "application/json"}
@@ -220,22 +269,30 @@ std::optional<DiscordUser> fetchDiscordUser(const std::string& accessToken) {
         ""
     );
     if (response.status < 200 || response.status >= 300) {
-        return std::nullopt;
+        return {{}, "oidc_userinfo_failed"};
     }
 
     const auto parsed = utils::json::parseObject(response.body);
     if (!parsed) {
-        return std::nullopt;
+        return {{}, "oidc_userinfo_invalid"};
     }
 
-    const auto id = utils::json::getString(*parsed, "id");
-    const auto username = utils::json::getString(*parsed, "username");
-    if (!id || id->empty() || !username || username->empty()) {
-        return std::nullopt;
+    const auto subject = utils::json::getString(*parsed, "sub");
+    const auto email = utils::json::getString(*parsed, "email");
+    const auto emailVerified = utils::json::getBool(*parsed, "email_verified");
+    if (!subject || subject->empty()) {
+        return {{}, "missing_subject"};
+    }
+    if (!email || email->empty()) {
+        return {{}, "missing_email"};
+    }
+    if (!emailVerified || !*emailVerified) {
+        return {{}, "email_not_verified"};
     }
 
-    const auto email = utils::json::getString(*parsed, "email").value_or("");
-    return DiscordUser{*id, *username, email};
+    std::string username = utils::json::getString(*parsed, "preferred_username")
+        .value_or(utils::json::getString(*parsed, "name").value_or(*email));
+    return {VerifiedIdentity{*subject, username, *email}, {}};
 }
 
 std::optional<std::string> tokenFromRequest(const HttpRequest& request, const std::optional<pixelwar::utils::json::Object>& body = std::nullopt) {
@@ -298,7 +355,7 @@ std::string quotaJson(const storage::PixelQuotaStatus& status, std::int64_t cool
     return out.str();
 }
 
-std::optional<HttpResponse> discordSessionGuard(
+std::optional<HttpResponse> verifiedSessionGuard(
     const HttpRequest& request,
     const storage::UserStore& userStore,
     pixelwar::security::SessionManager& sessions,
@@ -316,8 +373,8 @@ std::optional<HttpResponse> discordSessionGuard(
     }
 
     const auto user = userStore.findById(*sessionUserId);
-    if (!user || user->oauthProvider != "discord" || user->oauthSubject.empty()) {
-        return jsonError(403, "discord_auth_required");
+    if (!user || user->oauthProvider != kVerifiedAuthProvider || user->oauthSubject.empty() || user->email.empty()) {
+        return jsonError(403, "verified_email_auth_required");
     }
 
     userId = *sessionUserId;
@@ -331,7 +388,7 @@ std::optional<HttpResponse> adminGuard(
     const config::ServerConfig& cfg
 ) {
     std::uint64_t userId = 0;
-    if (auto error = discordSessionGuard(request, userStore, sessions, userId)) {
+    if (auto error = verifiedSessionGuard(request, userStore, sessions, userId)) {
         return *error;
     }
 
@@ -339,8 +396,8 @@ std::optional<HttpResponse> adminGuard(
     if (!user) {
         return jsonError(403, "forbidden");
     }
-    if (!cfg.adminDiscordId.empty()) {
-        if (user->oauthSubject != cfg.adminDiscordId) {
+    if (!cfg.adminOidcSubject.empty()) {
+        if (user->oauthSubject != cfg.adminOidcSubject) {
             return jsonError(403, "forbidden");
         }
         return std::nullopt;
@@ -442,29 +499,35 @@ void registerApiRoutes(
         return HttpResponse::json(200, paletteJson(cfg.paletteSize));
     });
 
-    router.add("GET", "/auth/discord/status", [&cfg](const HttpRequest&) {
+    router.add("GET", "/auth/status", [&cfg](const HttpRequest&) {
         std::ostringstream out;
-        out << R"({"enabled":)" << (isDiscordOAuthConfigured(cfg) ? "true" : "false")
-            << R"(,"login_url":"/auth/discord"})";
+        out << R"({"enabled":)" << (isOidcConfigured(cfg) ? "true" : "false")
+            << R"(,"provider":")" << utils::json::escape(cfg.oidcProviderName) << '"'
+            << R"(,"login_url":"/auth/login"})";
         return HttpResponse::json(200, out.str());
     });
 
-    router.add("GET", "/auth/discord", [&cfg, oauthStates](const HttpRequest&) {
-        if (!isDiscordOAuthConfigured(cfg)) {
-            return authErrorHtml("discord_not_configured");
+    router.add("GET", "/auth/login", [&cfg, oauthStates](const HttpRequest&) {
+        if (!isOidcConfigured(cfg)) {
+            return authErrorHtml("oidc_not_configured");
+        }
+
+        const auto endpoint = parseHttpsEndpoint(cfg.oidcAuthorizationEndpoint);
+        if (!endpoint) {
+            return authErrorHtml("invalid_oidc_authorization_endpoint");
         }
 
         const std::string state = oauthStates->create();
-        const std::string url = "https://discord.com/oauth2/authorize"
+        const std::string url = cfg.oidcAuthorizationEndpoint +
             "?response_type=code"
-            "&client_id=" + urlEncode(cfg.discordClientId) +
-            "&scope=" + urlEncode("identify email") +
-            "&redirect_uri=" + urlEncode(discordRedirectUri(cfg)) +
+            "&client_id=" + urlEncode(cfg.oidcClientId) +
+            "&scope=" + urlEncode("openid profile email") +
+            "&redirect_uri=" + urlEncode(oidcRedirectUri(cfg)) +
             "&state=" + urlEncode(state);
         return redirectTo(url);
     });
 
-    router.add("GET", cfg.discordRedirectPath, [&userStore, &sessions, &cfg, oauthStates](const HttpRequest& request) {
+    router.add("GET", cfg.oidcRedirectPath, [&userStore, &sessions, &cfg, oauthStates](const HttpRequest& request) {
         if (const auto error = request.queryValue("error")) {
             return authErrorHtml(*error);
         }
@@ -475,17 +538,22 @@ void registerApiRoutes(
             return authErrorHtml("invalid_oauth_state");
         }
 
-        const auto discordToken = exchangeDiscordCode(cfg, *code);
-        if (!discordToken) {
-            return authErrorHtml("discord_token_exchange_failed");
+        const auto oidcToken = exchangeOidcCode(cfg, *code);
+        if (!oidcToken) {
+            return authErrorHtml("oidc_token_exchange_failed");
         }
 
-        const auto discordUser = fetchDiscordUser(discordToken->accessToken);
-        if (!discordUser) {
-            return authErrorHtml("discord_user_fetch_failed");
+        const auto identity = fetchVerifiedIdentity(cfg, oidcToken->accessToken);
+        if (!identity.identity) {
+            return authErrorHtml(identity.error.empty() ? "oidc_user_fetch_failed" : identity.error);
         }
 
-        const auto userId = userStore.upsertOAuthUser("discord", discordUser->id, discordUser->username, discordUser->email);
+        const auto userId = userStore.upsertOAuthUser(
+            kVerifiedAuthProvider,
+            identity.identity->subject,
+            identity.identity->username,
+            identity.identity->email
+        );
         const auto localUser = userStore.findById(userId);
         if (!localUser) {
             return authErrorHtml("local_user_failed");
@@ -496,11 +564,11 @@ void registerApiRoutes(
     });
 
     router.add("POST", "/register", [](const HttpRequest&) {
-        return jsonError(410, "discord_auth_required");
+        return jsonError(410, "verified_email_auth_required");
     });
 
     router.add("POST", "/login", [](const HttpRequest&) {
-        return jsonError(410, "discord_auth_required");
+        return jsonError(410, "verified_email_auth_required");
     });
 
     router.add("GET", "/map", [&pixelMap](const HttpRequest& request) {
@@ -521,7 +589,7 @@ void registerApiRoutes(
         }
 
         std::uint64_t userId = 0;
-        if (auto error = discordSessionGuard(request, userStore, sessions, userId, body)) {
+        if (auto error = verifiedSessionGuard(request, userStore, sessions, userId, body)) {
             return *error;
         }
 
@@ -573,7 +641,7 @@ void registerApiRoutes(
 
     router.add("GET", "/cooldown", [&userStore, &sessions, &cfg](const HttpRequest& request) {
         std::uint64_t userId = 0;
-        if (auto error = discordSessionGuard(request, userStore, sessions, userId)) {
+        if (auto error = verifiedSessionGuard(request, userStore, sessions, userId)) {
             return *error;
         }
 

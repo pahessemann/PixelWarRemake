@@ -125,7 +125,7 @@ TEST_CASE("user store allows three pixels per cooldown window") {
     std::filesystem::remove(path);
 
     pixelwar::storage::UserStore store(path);
-    const auto userId = store.upsertOAuthUser("discord", "quota-subject", "quota_user", "quota@example.test");
+    const auto userId = store.upsertOAuthUser("oidc", "quota-subject", "quota_user", "quota@example.test");
     REQUIRE(userId > 0);
 
     auto status = store.pixelQuotaStatus(userId, 600, 3);
@@ -154,20 +154,20 @@ TEST_CASE("oauth users are created without local password registration") {
     std::filesystem::remove(path);
 
     pixelwar::storage::UserStore store(path);
-    REQUIRE(store.upsertOAuthUser("google", "google-123", "Google User", "google@example.test") == 0);
+    REQUIRE(store.upsertOAuthUser("oidc", "missing-email", "No Email", "") == 0);
     REQUIRE(store.userCount() == 0);
 
-    const auto userId = store.upsertOAuthUser("discord", "123456789", "Discord User", "user@example.test");
+    const auto userId = store.upsertOAuthUser("oidc", "123456789", "Verified User", "user@example.test");
     REQUIRE(userId > 0);
 
     const auto user = store.findById(userId);
     REQUIRE(user.has_value());
-    REQUIRE(user->oauthProvider == "discord");
+    REQUIRE(user->oauthProvider == "oidc");
     REQUIRE(user->oauthSubject == "123456789");
     REQUIRE(user->email == "user@example.test");
     REQUIRE(user->passwordHash.empty());
 
-    const auto sameUserId = store.upsertOAuthUser("discord", "123456789", "Another Name", "next@example.test");
+    const auto sameUserId = store.upsertOAuthUser("oidc", "123456789", "Another Name", "next@example.test");
     REQUIRE(sameUserId == userId);
 
     std::filesystem::remove(path);
@@ -180,23 +180,23 @@ TEST_CASE("user store ignores legacy password accounts on load") {
     {
         std::ofstream file(path, std::ios::trunc);
         file << "1\tbGVnYWN5\toldhash\t0\t0\t0\n";
-        file << "2\tZGlzY29yZF91c2Vy\t\t0\t0\t0\tZGlzY29yZA==\tMTIz\tZGlzY29yZEBleGFtcGxlLnRlc3Q=\n";
+        file << "2\tdmVyaWZpZWRfdXNlcg==\t\t0\t0\t0\tb2lkYw==\tMTIz\tZGlzY29yZEBleGFtcGxlLnRlc3Q=\n";
     }
 
     pixelwar::storage::UserStore store(path);
     REQUIRE(store.load());
     REQUIRE(store.userCount() == 1);
 
-    const auto discordUser = store.findById(2);
-    REQUIRE(discordUser.has_value());
-    REQUIRE(discordUser->username == "discord_user");
-    REQUIRE(discordUser->oauthProvider == "discord");
-    REQUIRE(discordUser->oauthSubject == "123");
+    const auto verifiedUser = store.findById(2);
+    REQUIRE(verifiedUser.has_value());
+    REQUIRE(verifiedUser->username == "verified_user");
+    REQUIRE(verifiedUser->oauthProvider == "oidc");
+    REQUIRE(verifiedUser->oauthSubject == "123");
 
     std::string error;
     REQUIRE(!store.registerUser("legacy", "motdepasse-solide", error));
-    REQUIRE(error == "discord_auth_required");
-    REQUIRE(!store.verifyCredentials("discord_user", "motdepasse-solide").has_value());
+    REQUIRE(error == "verified_email_auth_required");
+    REQUIRE(!store.verifyCredentials("verified_user", "motdepasse-solide").has_value());
 
     std::filesystem::remove(path);
 }
@@ -225,7 +225,7 @@ TEST_CASE("api disables password register and login routes") {
     REQUIRE(router.dispatch(request).status == 410);
 
     request.method = "GET";
-    request.path = "/auth/discord/status";
+    request.path = "/auth/status";
     request.body.clear();
     const auto status = router.dispatch(request);
     REQUIRE(status.status == 200);
@@ -237,7 +237,7 @@ TEST_CASE("api disables password register and login routes") {
     request.headers["authorization"] = "Bearer " + legacyToken;
     const auto legacyCooldown = router.dispatch(request);
     REQUIRE(legacyCooldown.status == 403);
-    REQUIRE(legacyCooldown.body.find("discord_auth_required") != std::string::npos);
+    REQUIRE(legacyCooldown.body.find("verified_email_auth_required") != std::string::npos);
 
     std::filesystem::remove(path);
 }
@@ -250,7 +250,7 @@ TEST_CASE("admin api manages map backups and reset") {
     pixelwar::http::Router router;
     pixelwar::storage::PixelMap map(4, 4, 16);
     pixelwar::storage::UserStore store(dir / "users.db");
-    const auto adminUserId = store.upsertOAuthUser("discord", "admin-subject", "Admin User", "admin@example.test");
+    const auto adminUserId = store.upsertOAuthUser("oidc", "admin-subject", "Admin User", "admin@example.test");
     pixelwar::security::SessionManager sessions(std::chrono::seconds(60));
     const auto token = sessions.createSession(adminUserId);
     pixelwar::security::RateLimiter limiter;

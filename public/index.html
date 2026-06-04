@@ -7,7 +7,7 @@
   <title>PixelWarRemake</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="manifest" href="/site.webmanifest">
-  <link rel="stylesheet" href="/styles.css?v=discord-auth-v1">
+  <link rel="stylesheet" href="/styles.css?v=verified-auth-v1">
 </head>
 <body>
   <div class="app-shell">
@@ -39,10 +39,10 @@
             <strong id="connectedUsername">-</strong>
           </div>
 
-          <div id="discordAuth" class="oauth-card">
-            <span>Connexion obligatoire avec un compte Discord valide.</span>
-            <a id="discordLoginLink" class="primary-button auth-link" href="/auth/discord">Connexion Discord</a>
-            <p id="discordConfigNotice" class="auth-note hidden">Discord OAuth n'est pas encore configure cote serveur.</p>
+          <div id="verifiedAuth" class="oauth-card">
+            <span>Connexion obligatoire avec un compte dont l'email est verifie.</span>
+            <a id="verifiedLoginLink" class="primary-button auth-link" href="/auth/login">Connexion securisee</a>
+            <p id="authConfigNotice" class="auth-note hidden">L'authentification verifiee n'est pas encore configuree cote serveur.</p>
           </div>
         </section>
 
@@ -103,6 +103,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=discord-auth-v1" defer></script>
+  <script src="/app.js?v=verified-auth-v1" defer></script>
 </body>
 </html>

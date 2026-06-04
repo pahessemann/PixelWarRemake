@@ -3,7 +3,7 @@
 const state = {
   token: localStorage.getItem("pixelwar.token") || "",
   username: localStorage.getItem("pixelwar.username") || "",
-  discordAuthEnabled: false,
+  authEnabled: false,
   palette: [],
   selectedColor: 0,
   width: 1,
@@ -41,9 +41,9 @@ const els = {
   logoutButton: document.getElementById("logoutButton"),
   authConnected: document.getElementById("authConnected"),
   connectedUsername: document.getElementById("connectedUsername"),
-  discordAuth: document.getElementById("discordAuth"),
-  discordLoginLink: document.getElementById("discordLoginLink"),
-  discordConfigNotice: document.getElementById("discordConfigNotice"),
+  verifiedAuth: document.getElementById("verifiedAuth"),
+  verifiedLoginLink: document.getElementById("verifiedLoginLink"),
+  authConfigNotice: document.getElementById("authConfigNotice"),
   paletteGrid: document.getElementById("paletteGrid"),
   selectedColorLabel: document.getElementById("selectedColorLabel"),
   targetCellLabel: document.getElementById("targetCellLabel"),
@@ -80,18 +80,18 @@ function updateAuthUi() {
     els.connectionLabel.textContent = `Connecté : ${username}`;
     els.connectedUsername.textContent = username;
     els.authConnected.classList.remove("hidden");
-    els.discordAuth.classList.add("hidden");
+    els.verifiedAuth.classList.add("hidden");
     els.logoutButton.classList.remove("hidden");
   } else {
     els.connectionLabel.textContent = "Invite";
     els.connectedUsername.textContent = "-";
     els.authConnected.classList.add("hidden");
-    els.discordAuth.classList.remove("hidden");
+    els.verifiedAuth.classList.remove("hidden");
     els.logoutButton.classList.add("hidden");
   }
 
-  els.discordLoginLink.classList.toggle("disabled-link", !state.discordAuthEnabled);
-  els.discordConfigNotice.classList.toggle("hidden", state.discordAuthEnabled);
+  els.verifiedLoginLink.classList.toggle("disabled-link", !state.authEnabled);
+  els.authConfigNotice.classList.toggle("hidden", state.authEnabled);
 }
 
 async function api(path, options = {}) {
@@ -329,16 +329,19 @@ async function refreshCooldown() {
 
 async function loadAuthStatus() {
   try {
-    const status = await api("/auth/discord/status");
-    state.discordAuthEnabled = Boolean(status.enabled);
+    const status = await api("/auth/status");
+    state.authEnabled = Boolean(status.enabled);
     if (status.login_url) {
-      els.discordLoginLink.href = status.login_url;
+      els.verifiedLoginLink.href = status.login_url;
+    }
+    if (status.provider) {
+      els.verifiedLoginLink.textContent = `Connexion ${status.provider}`;
     }
     updateAuthUi();
   } catch (error) {
-    state.discordAuthEnabled = false;
+    state.authEnabled = false;
     updateAuthUi();
-    setStatus(`Discord: ${error.message}`);
+    setStatus(`Auth: ${error.message}`);
   }
 }
 
@@ -693,17 +696,17 @@ function renderHighlights() {
 async function init() {
   const authError = new URLSearchParams(window.location.search).get("auth_error");
   if (authError) {
-    setStatus(`Discord: ${authError}`);
+    setStatus(`Auth: ${authError}`);
     window.history.replaceState({}, document.title, window.location.pathname);
   }
 
   updateAuthUi();
   updateCooldownUi();
 
-  els.discordLoginLink.addEventListener("click", (event) => {
-    if (!state.discordAuthEnabled) {
+  els.verifiedLoginLink.addEventListener("click", (event) => {
+    if (!state.authEnabled) {
       event.preventDefault();
-      setStatus("Discord OAuth non configure");
+      setStatus("Authentification verifiee non configuree");
     }
   });
   els.logoutButton.addEventListener("click", logout);

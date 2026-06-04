@@ -100,7 +100,7 @@ std::string sanitizeUsername(const std::string& preferred, const std::string& su
     }
 
     if (out.size() < 3) {
-        out = "discord_" + subject.substr(subject.size() > 8 ? subject.size() - 8 : 0);
+        out = "user_" + subject.substr(subject.size() > 8 ? subject.size() - 8 : 0);
     }
     if (out.size() > 24) {
         out.resize(24);
@@ -141,7 +141,7 @@ std::string uniqueUsername(
         }
     }
 
-    return "discord_" + std::to_string(existing.size() + 1);
+    return "user_" + std::to_string(existing.size() + 1);
 }
 
 } // namespace
@@ -196,7 +196,7 @@ bool UserStore::load() {
         user.oauthProvider = decodeBase64Text(parts[6]);
         user.oauthSubject = decodeBase64Text(parts[7]);
         user.email = decodeBase64Text(parts[8]);
-        if (user.oauthProvider != "discord" || user.oauthSubject.empty()) {
+        if (user.oauthProvider.empty() || user.oauthSubject.empty() || user.email.empty()) {
             continue;
         }
 
@@ -222,7 +222,7 @@ void UserStore::save() const {
     }
 
     for (const auto& [id, user] : usersById_) {
-        if (user.oauthProvider != "discord" || user.oauthSubject.empty()) {
+        if (user.oauthProvider.empty() || user.oauthSubject.empty() || user.email.empty()) {
             continue;
         }
         file << id << '\t'
@@ -240,7 +240,7 @@ void UserStore::save() const {
 bool UserStore::registerUser(const std::string& username, const std::string& password, std::string& error) {
     (void)username;
     (void)password;
-    error = "discord_auth_required";
+    error = "verified_email_auth_required";
     return false;
 }
 
@@ -256,7 +256,7 @@ std::uint64_t UserStore::upsertOAuthUser(
     const std::string& preferredUsername,
     const std::string& email
 ) {
-    if (provider != "discord" || subject.empty()) {
+    if (provider.empty() || subject.empty() || email.empty()) {
         return 0;
     }
 

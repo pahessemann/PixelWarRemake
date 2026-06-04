@@ -81,20 +81,32 @@ ServerConfig loadServerConfig(const std::filesystem::path& path) {
     if (auto adminUsername = utils::json::getString(*parsed, "admin_username")) {
         cfg.adminUsername = *adminUsername;
     }
-    if (auto adminDiscordId = utils::json::getString(*parsed, "admin_discord_id")) {
-        cfg.adminDiscordId = *adminDiscordId;
+    if (auto adminOidcSubject = utils::json::getString(*parsed, "admin_oidc_subject")) {
+        cfg.adminOidcSubject = *adminOidcSubject;
     }
     if (auto publicBaseUrl = utils::json::getString(*parsed, "public_base_url")) {
         cfg.publicBaseUrl = *publicBaseUrl;
     }
-    if (auto clientId = utils::json::getString(*parsed, "discord_client_id")) {
-        cfg.discordClientId = *clientId;
+    if (auto providerName = utils::json::getString(*parsed, "oidc_provider_name")) {
+        cfg.oidcProviderName = *providerName;
     }
-    if (auto clientSecret = utils::json::getString(*parsed, "discord_client_secret")) {
-        cfg.discordClientSecret = *clientSecret;
+    if (auto endpoint = utils::json::getString(*parsed, "oidc_authorization_endpoint")) {
+        cfg.oidcAuthorizationEndpoint = *endpoint;
     }
-    if (auto redirectPath = utils::json::getString(*parsed, "discord_redirect_path")) {
-        cfg.discordRedirectPath = *redirectPath;
+    if (auto endpoint = utils::json::getString(*parsed, "oidc_token_endpoint")) {
+        cfg.oidcTokenEndpoint = *endpoint;
+    }
+    if (auto endpoint = utils::json::getString(*parsed, "oidc_userinfo_endpoint")) {
+        cfg.oidcUserinfoEndpoint = *endpoint;
+    }
+    if (auto clientId = utils::json::getString(*parsed, "oidc_client_id")) {
+        cfg.oidcClientId = *clientId;
+    }
+    if (auto clientSecret = utils::json::getString(*parsed, "oidc_client_secret")) {
+        cfg.oidcClientSecret = *clientSecret;
+    }
+    if (auto redirectPath = utils::json::getString(*parsed, "oidc_redirect_path")) {
+        cfg.oidcRedirectPath = *redirectPath;
     }
     if (auto paletteSize = utils::json::getInt(*parsed, "palette_size")) {
         if (*paletteSize > 0 && *paletteSize <= 256) {
@@ -108,14 +120,26 @@ ServerConfig loadServerConfig(const std::filesystem::path& path) {
     if (auto value = envString("PIXELWAR_PUBLIC_BASE_URL")) {
         cfg.publicBaseUrl = *value;
     }
-    if (auto value = envString("PIXELWAR_DISCORD_CLIENT_ID")) {
-        cfg.discordClientId = *value;
+    if (auto value = envString("PIXELWAR_OIDC_PROVIDER_NAME")) {
+        cfg.oidcProviderName = *value;
     }
-    if (auto value = envString("PIXELWAR_DISCORD_CLIENT_SECRET")) {
-        cfg.discordClientSecret = *value;
+    if (auto value = envString("PIXELWAR_OIDC_AUTHORIZATION_ENDPOINT")) {
+        cfg.oidcAuthorizationEndpoint = *value;
     }
-    if (auto value = envString("PIXELWAR_ADMIN_DISCORD_ID")) {
-        cfg.adminDiscordId = *value;
+    if (auto value = envString("PIXELWAR_OIDC_TOKEN_ENDPOINT")) {
+        cfg.oidcTokenEndpoint = *value;
+    }
+    if (auto value = envString("PIXELWAR_OIDC_USERINFO_ENDPOINT")) {
+        cfg.oidcUserinfoEndpoint = *value;
+    }
+    if (auto value = envString("PIXELWAR_OIDC_CLIENT_ID")) {
+        cfg.oidcClientId = *value;
+    }
+    if (auto value = envString("PIXELWAR_OIDC_CLIENT_SECRET")) {
+        cfg.oidcClientSecret = *value;
+    }
+    if (auto value = envString("PIXELWAR_ADMIN_OIDC_SUBJECT")) {
+        cfg.adminOidcSubject = *value;
     }
 
     return cfg;

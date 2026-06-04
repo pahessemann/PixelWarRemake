@@ -22,28 +22,28 @@ paths:
       summary: Disabled local account creation
       responses:
         "410":
-          description: Discord OAuth is required
+          description: Verified email authentication is required
   /login:
     post:
       summary: Disabled password login
       responses:
         "410":
-          description: Discord OAuth is required
-  /auth/discord/status:
+          description: Verified email authentication is required
+  /auth/status:
     get:
-      summary: Discord OAuth configuration status
+      summary: Verified OIDC configuration status
       responses:
         "200":
-          description: Whether Discord login is configured
-  /auth/discord:
+          description: Whether verified OIDC login is configured
+  /auth/login:
     get:
-      summary: Redirect to Discord OAuth2 authorization
+      summary: Redirect to the configured OpenID Connect authorization endpoint
       responses:
         "302":
-          description: Redirect to Discord
-  /auth/discord/callback:
+          description: Redirect to the identity provider
+  /auth/callback:
     get:
-      summary: Discord OAuth2 callback
+      summary: OpenID Connect callback
       parameters:
         - name: code
           in: query
@@ -55,7 +55,7 @@ paths:
             type: string
       responses:
         "200":
-          description: HTML page that stores the PixelWar session token and redirects home
+          description: HTML page that stores the PixelWar session token after email_verified is true
   /map:
     get:
       summary: Read the pixel map or a diff
@@ -96,7 +96,7 @@ paths:
         "401":
           description: Missing or invalid token
         "403":
-          description: Discord OAuth account required
+          description: Verified email account required
         "429":
           description: Cooldown still active
   /cooldown:
@@ -110,7 +110,7 @@ paths:
         "401":
           description: Missing or invalid token
         "403":
-          description: Discord OAuth account required
+          description: Verified email account required
   /admin/summary:
     get:
       summary: Admin dashboard summary
@@ -125,7 +125,7 @@ paths:
           description: Authenticated user is not the configured admin
   /admin/users:
     get:
-      summary: Admin Discord user list
+      summary: Admin verified-account user list
       security:
         - bearerAuth: []
       responses:
